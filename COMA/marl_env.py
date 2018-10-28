@@ -35,8 +35,10 @@ if __name__=="__main__":
 
     print(env.action_space)
     print(env.observation_space)
+    env.reset()
     while True:
         env.render()
         # NOOP RIGHT LEFT UP DOWN, can induce diagonal motion
-        obs_n, reward_n, done_n, info_n = env.step([[1, 0, 0, 0, 0] ,[1, 0, 0, 0, 0], [1, 0, 0, 0, 0]])
-        print(obs_n[0])
+        obs_n, reward_n, done_n, info_n = env.step([[0, 1, 0, 0, 0], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0]])
+        print(reward_n)
+        print(len(obs_n[0]))

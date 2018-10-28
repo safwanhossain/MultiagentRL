@@ -4,7 +4,7 @@ import multiagent.policy
 import torch
 import torch.nn as nn
 
-class Actor_Policy(Policy):
+class Actor_Policy():
     ''' This is the class that the particle environment is used to. Requires the implementation
     of the action function which, given an observation, return an action'''
     def __init__(self, input_size, h_size, action_size):
@@ -14,19 +14,8 @@ class Actor_Policy(Policy):
         actions = self.actor_network(obs, eps=0.1)
         
 class Actor(torch.nn.Module):
-    ''' This network, takes in observations, and returns an action. Action space is discreete, 
-    5 possible actions (NOOP, LEFT, RIGHT, UP, DOWN)
-    
-    Observation space:
-    Agent’s own velocity 2D
-    Agent’s own position 2D
-    Landmark positions with respect to the agent 3*2D
-    The positions of other agents with respect to the agent 2*2D
-    The messages C from other agents 2*2D messages (DISCARD)
-    
-    Note: Agents have access to almost everything about the global state except for other agent's 
-    velocity. The GRU cell is still useful to model where other agents are going '''
-
+    ''' This network, takes in observations, and returns an action. Action space is discrete,
+    '''
 
     def __init__(self, input_size, h_size, action_size):
         super(Actor, self).__init__()
@@ -42,13 +31,16 @@ class Actor(torch.nn.Module):
 
     def forward(self, obs_seq, eps):
         """
+        outputs prob dist over possible actions, using an eps-bounded softmax for exploration
+        input sequence shape is batch-first
         :param obs_seq: a sequence of shape (batch, seq_len, input_size)
         where input_size refers to size of [obs, prev_action]
         :param eps: softmax lower bound, for exploration
         :return:
         """
         batch_size = obs_seq.size()[0]
-        h0 = torch.zeros(1, 10, self.h_size)
+        # initial state, shape (num_layers * num_directions, batch, hidden_size)
+        h0 = torch.zeros(1, batch_size, self.h_size)
 
         # output has shape [batch, seq_len, h_size]
         output, hn = self.actor_gru(obs_seq, h0)
@@ -60,7 +52,7 @@ class Actor(torch.nn.Module):
 
 def unit_test():
     test_actor = Actor(input_size=14, h_size=128, action_size=5)
-    obs_seq = torch.randn((10,6, 14))
+    obs_seq = torch.randn((10, 6, 14))
     output = test_actor.forward(obs_seq, eps=0.01)
     if output.shape == (10, 6, 5):
         print("PASSED")
