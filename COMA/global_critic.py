@@ -46,5 +46,10 @@ def unit_test():
 
     print(output.shape)
 
+    print(output.grad_fn)
+    output.backward(torch.ones((6, 1)))
+    for param in test_critic.parameters():
+        print(param.grad)
+
 if __name__ == "__main__":
     unit_test()

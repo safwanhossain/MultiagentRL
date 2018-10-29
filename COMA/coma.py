@@ -54,7 +54,7 @@ class COMA():
         self.global_state_pl = np.zeros((batch_size, seq_len, state_size), dtype=np.float32)
 
         # joint-action state pairs
-        self.joint_action_state_pl = np.zeros((batch_size, seq_len, state_size + action_size*n_agents), dtype=np.float32)
+        self.joint_action_state_pl = None
 
         # obs, prev_action pairs, one tensor for each agent
         self.actor_input_pl = [np.zeros((batch_size, seq_len, obs_size+action_size), dtype=np.float32) for n in range(self.n_agents)]
@@ -70,7 +70,7 @@ class COMA():
                            h_size=h_size,
                            action_size = action_size)
 
-        self.critic = GlobalCritic(input_size=action_size*(n_agents - 1) + state_size + n_agents,
+        self.critic = GlobalCritic(input_size=action_size*(n_agents) + state_size,
                          hidden_size=action_size*state_size)
 
 
@@ -82,16 +82,64 @@ class COMA():
         """
 
         # first compute the future discounted return at every step using the sequence of rewards
+
+        G = np.zeros((self.batch_size, self.seq_len, self.seq_len + 1))
+        print('rewards', self.reward_seq_pl[0, :])
+
+        # apply discount and sum
+        total_return = self.reward_seq_pl.dot(np.fromfunction(lambda i: self.discount**i, shape=(self.seq_len,)))
+
+        print(total_return[0])
+
+        # initialize the first column with estimates from the Q network
+        predictions = self.critic.forward(self.joint_action_state_pl).squeeze()
+        print(predictions.requires_grad)
+
+        # compute the gradient of the predictions with respect to critic params
+        predictions.backward(torch.ones((self.batch_size, self.seq_len)))
+
+        # use detach to assign to numpy array
+        G[:, :, 0] = predictions.detach().numpy()
+
         # by moving backwards, construct the G matrix
-        # use broadcasting to compute for every batch
-        G = np.zeros((self.batch_size, self.seq_len, self.seq_len))
-        for t in range(self.seq_len - 1, 0, -1):
+        for t in range(self.seq_len - 1, -1, -1):
 
-            # initialize the first column with estimates from the Q network
-            # G[:, :, 0] = self.critic.forward(self.)
-            for n in range(1, self.seq_len - t - 1):
-                G[:, t, n] = self.reward_seq_pl[:, t] + self.discount*G[:, t+1, n-1]
+            # loop from one-step lookahead to pure MC estimate
+            for n in range(1, self.seq_len + 1):
 
+                # pure MC
+                if t + n > self.seq_len - 1:
+                    G[:, t, n] = total_return
+
+                # combination of MC + bootstrapping
+                else:
+                    G[:, t, n] = self.reward_seq_pl[:, t] + self.discount*G[:, t+1, n-1]
+
+        print(G[0, :, :])
+
+        # compute target at timestep t
+        targets = np.zeros((self.batch_size, self.seq_len))
+
+        # compute the error at timestep t, difference between prediction and target
+        error = np.zeros((self.batch_size, self.seq_len))
+
+        # vector of powers of lambda
+        weights = np.fromfunction(lambda i: lam**i, shape=(self.seq_len,))
+
+        # normalize
+        weights = weights * (1 - lam) / (1 - lam ** self.seq_len)
+
+        # should be 1
+        print(np.sum(weights))
+
+        for t in range(0, self.seq_len):
+            targets[:, t] = G[:, t, 1:].dot(weights)
+            error[:, t] = G[:, t, 0] - targets[:, t]
+
+        print(targets[0, :])
+        print(error[0, :])
+
+        # apply 
 
     def gather_rollouts(self, eps):
         """
@@ -145,17 +193,24 @@ class COMA():
                 # get the absolute landmark positions for the global state
                 self.global_state_pl[i, t, self.n_agents*4:] = np.array([landmark.state.p_pos for landmark in self.env.world.landmarks]).flatten()
 
+        # concatenate the joint action, global state
+        self.joint_action_state_pl = torch.from_numpy(np.concatenate((self.joint_action_pl, self.global_state_pl), axis=-1))
+        self.joint_action_state_pl.requires_grad_(True)
+
 def unit_test():
     n_agents = 3
     n_landmarks = 3
 
-    test_coma = COMA(env=env, batch_size=30, seq_len=2, discount=1, n_agents=3, action_size=5, obs_size=14, state_size=18, h_size=16)
+    test_coma = COMA(env=env, batch_size=30, seq_len=3, discount=0.99, n_agents=3, action_size=5, obs_size=14, state_size=18, h_size=16)
     test_coma.gather_rollouts(eps=0.05)
     print(test_coma.actor_input_pl[0].shape)
     print(test_coma.reward_seq_pl.shape)
     print(test_coma.joint_action_pl.shape)
     print(test_coma.global_state_pl.shape)
     print(test_coma.global_state_pl[0, 1, :])
+    print(test_coma.joint_action_state_pl[0, 1, :])
+
+    test_coma.fit_critic(lam=0.99)
 
 if __name__ == "__main__":
 
