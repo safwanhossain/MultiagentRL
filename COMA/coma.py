@@ -71,7 +71,7 @@ class COMA():
                            action_size = action_size)
 
         self.critic = GlobalCritic(input_size=action_size*(n_agents) + state_size,
-                         hidden_size=action_size*state_size)
+                         hidden_size=100)
 
 
     def fit_critic(self, lam):
@@ -84,19 +84,15 @@ class COMA():
         # first compute the future discounted return at every step using the sequence of rewards
 
         G = np.zeros((self.batch_size, self.seq_len, self.seq_len + 1))
-        print('rewards', self.reward_seq_pl[0, :])
+        # print('rewards', self.reward_seq_pl[0, :])
 
         # apply discount and sum
         total_return = self.reward_seq_pl.dot(np.fromfunction(lambda i: self.discount**i, shape=(self.seq_len,)))
 
-        print(total_return[0])
+        # print(total_return[0])
 
         # initialize the first column with estimates from the Q network
         predictions = self.critic.forward(self.joint_action_state_pl).squeeze()
-        print(predictions.requires_grad)
-
-        # compute the gradient of the predictions with respect to critic params
-        predictions.backward(torch.ones((self.batch_size, self.seq_len)))
 
         # use detach to assign to numpy array
         G[:, :, 0] = predictions.detach().numpy()
@@ -115,13 +111,8 @@ class COMA():
                 else:
                     G[:, t, n] = self.reward_seq_pl[:, t] + self.discount*G[:, t+1, n-1]
 
-        print(G[0, :, :])
-
         # compute target at timestep t
-        targets = np.zeros((self.batch_size, self.seq_len))
-
-        # compute the error at timestep t, difference between prediction and target
-        error = np.zeros((self.batch_size, self.seq_len))
+        targets = torch.zeros((self.batch_size, self.seq_len), dtype=torch.float32)
 
         # vector of powers of lambda
         weights = np.fromfunction(lambda i: lam**i, shape=(self.seq_len,))
@@ -132,14 +123,22 @@ class COMA():
         # should be 1
         print(np.sum(weights))
 
-        for t in range(0, self.seq_len):
-            targets[:, t] = G[:, t, 1:].dot(weights)
-            error[:, t] = G[:, t, 0] - targets[:, t]
+        # Optimizer
+        optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.005, eps=1e-08)
 
-        print(targets[0, :])
-        print(error[0, :])
+        for t in range(self.seq_len-1, -1, -1):
+            targets[:, t] = torch.from_numpy(G[:, t, 1:].dot(weights))
+            #print('target', targets[:, t])
+            pred = self.critic.forward(self.joint_action_state_pl[:, t]).squeeze()
+            #print('pred', pred)
 
-        # apply 
+            loss = torch.mean(torch.pow(targets[:, t] - pred, 2))
+            print('loss', loss)
+
+            # fit the Critic
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
     def gather_rollouts(self, eps):
         """
@@ -172,7 +171,6 @@ class COMA():
 
                     # use the observation to construct global state
                     # the global state consists of positions + velocity of agents, first 4 elements from obs
-                    print(self.global_state_pl[i, t, n*4:4*n+4].shape)
                     self.global_state_pl[i, t, n*4:4*n+4] = obs_n[n][0:4]
 
                     # get distribution over actions
@@ -201,7 +199,7 @@ def unit_test():
     n_agents = 3
     n_landmarks = 3
 
-    test_coma = COMA(env=env, batch_size=30, seq_len=3, discount=0.99, n_agents=3, action_size=5, obs_size=14, state_size=18, h_size=16)
+    test_coma = COMA(env=env, batch_size=1, seq_len=13, discount=0.99, n_agents=3, action_size=5, obs_size=14, state_size=18, h_size=16)
     test_coma.gather_rollouts(eps=0.05)
     print(test_coma.actor_input_pl[0].shape)
     print(test_coma.reward_seq_pl.shape)
@@ -210,7 +208,8 @@ def unit_test():
     print(test_coma.global_state_pl[0, 1, :])
     print(test_coma.joint_action_state_pl[0, 1, :])
 
-    test_coma.fit_critic(lam=0.99)
+    for e in range(20):
+        test_coma.fit_critic(lam=0.1)
 
 if __name__ == "__main__":
 
