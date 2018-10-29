@@ -19,9 +19,11 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
 
 class COMA():
 
-    def __init__(self, env, batch_size, seq_len, n_agents, action_size, obs_size, state_size, h_size):
+    def __init__(self, env, batch_size, seq_len, discount, n_agents, action_size, obs_size, state_size, h_size):
         """
         :param batch_size:
+        :param seq_len: horizon
+        :param discount: discounting factor
         :param n_agents:
         :param action_size: size of the discrete action space, actions are as one-hot vectors
         :param obs_size:
@@ -31,6 +33,7 @@ class COMA():
         super(COMA, self).__init__()
         self.batch_size = batch_size
         self.seq_len = seq_len
+        self.discount = discount
         self.n_agents = n_agents
         self.action_size = action_size
         self.obs_size = obs_size
@@ -50,6 +53,9 @@ class COMA():
         # the global state
         self.global_state_pl = np.zeros((batch_size, seq_len, state_size), dtype=np.float32)
 
+        # joint-action state pairs
+        self.joint_action_state_pl = np.zeros((batch_size, seq_len, state_size + action_size*n_agents), dtype=np.float32)
+
         # obs, prev_action pairs, one tensor for each agent
         self.actor_input_pl = [np.zeros((batch_size, seq_len, obs_size+action_size), dtype=np.float32) for n in range(self.n_agents)]
 
@@ -68,37 +74,24 @@ class COMA():
                          hidden_size=action_size*state_size)
 
 
-    def process_data(self, joint_action, global_state, observations, reward_seq):
+    def fit_critic(self, lam):
         """
-        places numpy arrays of episode data into placeholders
-        :param joint_action: [batch_size, seq_length, n_agents, action_size]
-        :param global_state: [batch_size, seq_length, state_size]
-        :param observations: [batch_size, seq_length, n_agents, obs_size]
-        :param reward_seq: [batch_size, seq_length]
+        Updates the critic using the off-line lambda return algorithm
+        :param lam: lambda parameter used to average n-step targets
         :return:
         """
-        batch_size = joint_action.shape()[0]
-        seq_length = joint_action.shape()[1]
-        assert(joint_action.shape() == (batch_size, seq_length, self.n_agents, self.action_size))
-        assert(observations.shape() == (batch_size, seq_length, self.n_agents, self.obs_size))
-        assert(global_state.shape() == (batch_size, seq_length, self.state_size))
-        assert(reward_seq.shape() == (batch_size, seq_length))
 
-        self.global_state_pl = torch.from_numpy(global_state)
-        self.joint_action_pl = torch.from_numpy(joint_action)
-        # process the data for Q and policy fitting
+        # first compute the future discounted return at every step using the sequence of rewards
+        # by moving backwards, construct the G matrix
+        # use broadcasting to compute for every batch
+        G = np.zeros((self.batch_size, self.seq_len, self.seq_len))
+        for t in range(self.seq_len - 1, 0, -1):
 
-        # compute the future return at every timestep for each trajectory
-        # use a lower triangular matrix to efficiently compute the sums
-        L = np.tril(np.ones((seq_length, seq_length), dtype=int), -1)
-        self.return_seq_pl = torch.from_numpy(self.reward_seq.dot(L))
+            # initialize the first column with estimates from the Q network
+            # G[:, :, 0] = self.critic.forward(self.)
+            for n in range(1, self.seq_len - t - 1):
+                G[:, t, n] = self.reward_seq_pl[:, t] + self.discount*G[:, t+1, n-1]
 
-        # first prev_action is the zero action NOOP
-        prev_actions = np.stack([np.zeros((batch_size, 1, self.n_agents, self.action_size)),
-                                 joint_action[:, 0:-1, :, :]],
-                                     axis=1)
-
-        self.policy_input_pl = torch.from_numpy(np.stack([observations, prev_actions], axis=-1))
 
     def gather_rollouts(self, eps):
         """
@@ -129,6 +122,11 @@ class COMA():
                 # for each agent, save observation, compute next action
                 for n in range(self.n_agents):
 
+                    # use the observation to construct global state
+                    # the global state consists of positions + velocity of agents, first 4 elements from obs
+                    print(self.global_state_pl[i, t, n*4:4*n+4].shape)
+                    self.global_state_pl[i, t, n*4:4*n+4] = obs_n[n][0:4]
+
                     # get distribution over actions
                     obs_action = np.concatenate((obs_n[n][0:self.obs_size], joint_action[n, :]))
                     actor_input = torch.from_numpy(obs_action).view(1, 1, -1).type(torch.FloatTensor)
@@ -144,17 +142,20 @@ class COMA():
                     action[action_idx] = 1
                     joint_action[n, :] = action
 
+                # get the absolute landmark positions for the global state
+                self.global_state_pl[i, t, self.n_agents*4:] = np.array([landmark.state.p_pos for landmark in self.env.world.landmarks]).flatten()
 
 def unit_test():
     n_agents = 3
     n_landmarks = 3
 
-    test_coma = COMA(env=env, batch_size=30, seq_len=2, n_agents=3, action_size=5, obs_size=14, state_size=18, h_size=16)
+    test_coma = COMA(env=env, batch_size=30, seq_len=2, discount=1, n_agents=3, action_size=5, obs_size=14, state_size=18, h_size=16)
     test_coma.gather_rollouts(eps=0.05)
     print(test_coma.actor_input_pl[0].shape)
     print(test_coma.reward_seq_pl.shape)
     print(test_coma.joint_action_pl.shape)
-
+    print(test_coma.global_state_pl.shape)
+    print(test_coma.global_state_pl[0, 1, :])
 
 if __name__ == "__main__":
 
