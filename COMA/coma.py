@@ -74,6 +74,64 @@ class COMA():
                          hidden_size=100)
 
 
+    def fit_actor(self, eps):
+        """
+        Updates the actor using policy gradient with counterfactual baseline.
+        Accumulates actor gradients from each agent and performs the update for every time-step
+        :return:
+        """
+
+        # first get the Q value for the joint actions
+        q_vals = self.critic.forward(self.joint_action_state_pl)
+
+        diff_actions = torch.zeros_like(self.joint_action_state_pl)
+
+        # initialize the advantage for each agent
+        advantage = [q_vals.detach() for a in range(self.n_agents)]
+
+        # Optimizer
+        optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.005, eps=1e-08)
+        optimizer.zero_grad()
+
+        # computing baselines, by broadcasting across rollouts and time-steps
+        for a in range(self.n_agents):
+
+            # get the dist over actions, based on each agent's observation, use the same epsilon during fitting?
+            action_dist = self.actor.forward(self.actor_input_pl[a], eps=eps)
+
+            # make a copy of the joint-action, state, to substitute different actions in it
+            diff_actions.copy_(self.joint_action_state_pl)
+
+            # compute the baseline for that agent, by substituting different actions in the joint action
+            for u in range(self.action_size):
+                action = torch.zeros(self.action_size)
+                action[u] = 1
+
+                # index into that agent's action to substitute a different one
+                action_index = a*self.action_size
+                diff_actions[:, :, action_index:action_index+self.action_size] = action
+
+                # get the Q value of that new joint action
+                Q_u = self.critic.forward(diff_actions)
+
+                advantage[a] -= Q_u*action_dist[:, :, u].unsqueeze_(-1)
+
+            # loss is negative log of probability of chosen action, scaled by the advantage
+            advantage[a] = advantage[a].detach()
+            EPS = 1.0e-08
+            loss = -torch.log(action_dist + EPS) * advantage[a].squeeze()
+            print('a', a, 'loss', torch.sum(loss))
+
+            # compute the gradients of the policy network using the advantage
+            # do not use optimizer.zero_grad() since we want to accumulate the gradients for all agents
+            loss.backward(torch.ones(self.batch_size, self.seq_len))
+
+            optimizer.zero_grad()
+            # after computing the gradient for all agents, perform a weight update on the policy network
+            optimizer.step()
+
+
+
     def fit_critic(self, lam):
         """
         Updates the critic using the off-line lambda return algorithm
@@ -127,10 +185,11 @@ class COMA():
         optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.005, eps=1e-08)
 
         for t in range(self.seq_len-1, -1, -1):
+            print('t', t)
             targets[:, t] = torch.from_numpy(G[:, t, 1:].dot(weights))
-            #print('target', targets[:, t])
+            print('target', targets[:, t])
             pred = self.critic.forward(self.joint_action_state_pl[:, t]).squeeze()
-            #print('pred', pred)
+            print('pred', pred)
 
             loss = torch.mean(torch.pow(targets[:, t] - pred, 2))
             print('loss', loss)
@@ -191,15 +250,17 @@ class COMA():
                 # get the absolute landmark positions for the global state
                 self.global_state_pl[i, t, self.n_agents*4:] = np.array([landmark.state.p_pos for landmark in self.env.world.landmarks]).flatten()
 
-        # concatenate the joint action, global state
+        # concatenate the joint action, global state, set network inputs to torch tensors
         self.joint_action_state_pl = torch.from_numpy(np.concatenate((self.joint_action_pl, self.global_state_pl), axis=-1))
         self.joint_action_state_pl.requires_grad_(True)
+
+        self.actor_input_pl = [torch.from_numpy(self.actor_input_pl[i]) for i in range(self.n_agents)]
 
 def unit_test():
     n_agents = 3
     n_landmarks = 3
 
-    test_coma = COMA(env=env, batch_size=1, seq_len=13, discount=0.99, n_agents=3, action_size=5, obs_size=14, state_size=18, h_size=16)
+    test_coma = COMA(env=env, batch_size=1, seq_len=13, discount=0.8, n_agents=3, action_size=5, obs_size=14, state_size=18, h_size=16)
     test_coma.gather_rollouts(eps=0.05)
     print(test_coma.actor_input_pl[0].shape)
     print(test_coma.reward_seq_pl.shape)
@@ -209,7 +270,10 @@ def unit_test():
     print(test_coma.joint_action_state_pl[0, 1, :])
 
     for e in range(20):
-        test_coma.fit_critic(lam=0.1)
+        test_coma.fit_actor(eps=0.05)
+
+    # for e in range(20):
+    #     test_coma.fit_critic(lam=0.5)
 
 if __name__ == "__main__":
 
