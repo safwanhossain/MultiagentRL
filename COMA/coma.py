@@ -19,9 +19,11 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
 
 class COMA():
 
-    def __init__(self, env, batch_size, seq_len, n_agents, action_size, obs_size, state_size, h_size):
+    def __init__(self, env, batch_size, seq_len, discount, n_agents, action_size, obs_size, state_size, h_size):
         """
         :param batch_size:
+        :param seq_len: horizon
+        :param discount: discounting factor
         :param n_agents:
         :param action_size: size of the discrete action space, actions are as one-hot vectors
         :param obs_size:
@@ -31,6 +33,7 @@ class COMA():
         super(COMA, self).__init__()
         self.batch_size = batch_size
         self.seq_len = seq_len
+        self.discount = discount
         self.n_agents = n_agents
         self.action_size = action_size
         self.obs_size = obs_size
@@ -50,6 +53,9 @@ class COMA():
         # the global state
         self.global_state_pl = np.zeros((batch_size, seq_len, state_size), dtype=np.float32)
 
+        # joint-action state pairs
+        self.joint_action_state_pl = None
+
         # obs, prev_action pairs, one tensor for each agent
         self.actor_input_pl = [np.zeros((batch_size, seq_len, obs_size+action_size), dtype=np.float32) for n in range(self.n_agents)]
 
@@ -64,41 +70,134 @@ class COMA():
                            h_size=h_size,
                            action_size = action_size)
 
-        self.critic = GlobalCritic(input_size=action_size*(n_agents - 1) + state_size + n_agents,
-                         hidden_size=action_size*state_size)
+        self.critic = GlobalCritic(input_size=action_size*(n_agents) + state_size,
+                         hidden_size=100)
 
 
-    def process_data(self, joint_action, global_state, observations, reward_seq):
+    def fit_actor(self, eps):
         """
-        places numpy arrays of episode data into placeholders
-        :param joint_action: [batch_size, seq_length, n_agents, action_size]
-        :param global_state: [batch_size, seq_length, state_size]
-        :param observations: [batch_size, seq_length, n_agents, obs_size]
-        :param reward_seq: [batch_size, seq_length]
+        Updates the actor using policy gradient with counterfactual baseline.
+        Accumulates actor gradients from each agent and performs the update for every time-step
         :return:
         """
-        batch_size = joint_action.shape()[0]
-        seq_length = joint_action.shape()[1]
-        assert(joint_action.shape() == (batch_size, seq_length, self.n_agents, self.action_size))
-        assert(observations.shape() == (batch_size, seq_length, self.n_agents, self.obs_size))
-        assert(global_state.shape() == (batch_size, seq_length, self.state_size))
-        assert(reward_seq.shape() == (batch_size, seq_length))
 
-        self.global_state_pl = torch.from_numpy(global_state)
-        self.joint_action_pl = torch.from_numpy(joint_action)
-        # process the data for Q and policy fitting
+        # first get the Q value for the joint actions
+        q_vals = self.critic.forward(self.joint_action_state_pl)
 
-        # compute the future return at every timestep for each trajectory
-        # use a lower triangular matrix to efficiently compute the sums
-        L = np.tril(np.ones((seq_length, seq_length), dtype=int), -1)
-        self.return_seq_pl = torch.from_numpy(self.reward_seq.dot(L))
+        diff_actions = torch.zeros_like(self.joint_action_state_pl)
 
-        # first prev_action is the zero action NOOP
-        prev_actions = np.stack([np.zeros((batch_size, 1, self.n_agents, self.action_size)),
-                                 joint_action[:, 0:-1, :, :]],
-                                     axis=1)
+        # initialize the advantage for each agent
+        advantage = [q_vals.detach() for a in range(self.n_agents)]
 
-        self.policy_input_pl = torch.from_numpy(np.stack([observations, prev_actions], axis=-1))
+        # Optimizer
+        optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.005, eps=1e-08)
+        optimizer.zero_grad()
+
+        # computing baselines, by broadcasting across rollouts and time-steps
+        for a in range(self.n_agents):
+
+            # get the dist over actions, based on each agent's observation, use the same epsilon during fitting?
+            action_dist = self.actor.forward(self.actor_input_pl[a], eps=eps)
+
+            # make a copy of the joint-action, state, to substitute different actions in it
+            diff_actions.copy_(self.joint_action_state_pl)
+
+            # compute the baseline for that agent, by substituting different actions in the joint action
+            for u in range(self.action_size):
+                action = torch.zeros(self.action_size)
+                action[u] = 1
+
+                # index into that agent's action to substitute a different one
+                action_index = a*self.action_size
+                diff_actions[:, :, action_index:action_index+self.action_size] = action
+
+                # get the Q value of that new joint action
+                Q_u = self.critic.forward(diff_actions)
+
+                advantage[a] -= Q_u*action_dist[:, :, u].unsqueeze_(-1)
+
+            # loss is negative log of probability of chosen action, scaled by the advantage
+            advantage[a] = advantage[a].detach()
+            EPS = 1.0e-08
+            loss = -torch.log(action_dist + EPS) * advantage[a].squeeze()
+            print('a', a, 'loss', torch.sum(loss))
+
+            # compute the gradients of the policy network using the advantage
+            # do not use optimizer.zero_grad() since we want to accumulate the gradients for all agents
+            loss.backward(torch.ones(self.batch_size, self.seq_len))
+
+            optimizer.zero_grad()
+            # after computing the gradient for all agents, perform a weight update on the policy network
+            optimizer.step()
+
+
+
+    def fit_critic(self, lam):
+        """
+        Updates the critic using the off-line lambda return algorithm
+        :param lam: lambda parameter used to average n-step targets
+        :return:
+        """
+
+        # first compute the future discounted return at every step using the sequence of rewards
+
+        G = np.zeros((self.batch_size, self.seq_len, self.seq_len + 1))
+        # print('rewards', self.reward_seq_pl[0, :])
+
+        # apply discount and sum
+        total_return = self.reward_seq_pl.dot(np.fromfunction(lambda i: self.discount**i, shape=(self.seq_len,)))
+
+        # print(total_return[0])
+
+        # initialize the first column with estimates from the Q network
+        predictions = self.critic.forward(self.joint_action_state_pl).squeeze()
+
+        # use detach to assign to numpy array
+        G[:, :, 0] = predictions.detach().numpy()
+
+        # by moving backwards, construct the G matrix
+        for t in range(self.seq_len - 1, -1, -1):
+
+            # loop from one-step lookahead to pure MC estimate
+            for n in range(1, self.seq_len + 1):
+
+                # pure MC
+                if t + n > self.seq_len - 1:
+                    G[:, t, n] = total_return
+
+                # combination of MC + bootstrapping
+                else:
+                    G[:, t, n] = self.reward_seq_pl[:, t] + self.discount*G[:, t+1, n-1]
+
+        # compute target at timestep t
+        targets = torch.zeros((self.batch_size, self.seq_len), dtype=torch.float32)
+
+        # vector of powers of lambda
+        weights = np.fromfunction(lambda i: lam**i, shape=(self.seq_len,))
+
+        # normalize
+        weights = weights * (1 - lam) / (1 - lam ** self.seq_len)
+
+        # should be 1
+        print(np.sum(weights))
+
+        # Optimizer
+        optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.005, eps=1e-08)
+
+        for t in range(self.seq_len-1, -1, -1):
+            print('t', t)
+            targets[:, t] = torch.from_numpy(G[:, t, 1:].dot(weights))
+            print('target', targets[:, t])
+            pred = self.critic.forward(self.joint_action_state_pl[:, t]).squeeze()
+            print('pred', pred)
+
+            loss = torch.mean(torch.pow(targets[:, t] - pred, 2))
+            print('loss', loss)
+
+            # fit the Critic
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
     def gather_rollouts(self, eps):
         """
@@ -129,6 +228,10 @@ class COMA():
                 # for each agent, save observation, compute next action
                 for n in range(self.n_agents):
 
+                    # use the observation to construct global state
+                    # the global state consists of positions + velocity of agents, first 4 elements from obs
+                    self.global_state_pl[i, t, n*4:4*n+4] = obs_n[n][0:4]
+
                     # get distribution over actions
                     obs_action = np.concatenate((obs_n[n][0:self.obs_size], joint_action[n, :]))
                     actor_input = torch.from_numpy(obs_action).view(1, 1, -1).type(torch.FloatTensor)
@@ -144,17 +247,33 @@ class COMA():
                     action[action_idx] = 1
                     joint_action[n, :] = action
 
+                # get the absolute landmark positions for the global state
+                self.global_state_pl[i, t, self.n_agents*4:] = np.array([landmark.state.p_pos for landmark in self.env.world.landmarks]).flatten()
+
+        # concatenate the joint action, global state, set network inputs to torch tensors
+        self.joint_action_state_pl = torch.from_numpy(np.concatenate((self.joint_action_pl, self.global_state_pl), axis=-1))
+        self.joint_action_state_pl.requires_grad_(True)
+
+        self.actor_input_pl = [torch.from_numpy(self.actor_input_pl[i]) for i in range(self.n_agents)]
 
 def unit_test():
     n_agents = 3
     n_landmarks = 3
 
-    test_coma = COMA(env=env, batch_size=30, seq_len=2, n_agents=3, action_size=5, obs_size=14, state_size=18, h_size=16)
+    test_coma = COMA(env=env, batch_size=1, seq_len=13, discount=0.8, n_agents=3, action_size=5, obs_size=14, state_size=18, h_size=16)
     test_coma.gather_rollouts(eps=0.05)
     print(test_coma.actor_input_pl[0].shape)
     print(test_coma.reward_seq_pl.shape)
     print(test_coma.joint_action_pl.shape)
+    print(test_coma.global_state_pl.shape)
+    print(test_coma.global_state_pl[0, 1, :])
+    print(test_coma.joint_action_state_pl[0, 1, :])
 
+    for e in range(20):
+        test_coma.fit_actor(eps=0.05)
+
+    # for e in range(20):
+    #     test_coma.fit_critic(lam=0.5)
 
 if __name__ == "__main__":
 

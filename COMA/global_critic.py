@@ -26,7 +26,9 @@ class GlobalCritic(torch.nn.Module):
                 nn.Linear(input_size, hidden_size),
                 nn.Tanh()
         )
-        self.linear2 = nn.Linear(hidden_size, 1)
+        self.linear2 = nn.Linear(hidden_size, hidden_size)
+
+        self.linear3 = nn.Linear(hidden_size, 1)
 
     def forward(self, state_action):
         """
@@ -34,7 +36,8 @@ class GlobalCritic(torch.nn.Module):
         :return: Q-value for the joint state
         """
         h = torch.tanh(self.linear1(state_action))
-        return self.linear2(h)
+        h = torch.tanh(self.linear2(h))
+        return self.linear3(h)
 
 def unit_test():
     test_critic = GlobalCritic(10, 256)
@@ -45,6 +48,11 @@ def unit_test():
         print("PASSED")
 
     print(output.shape)
+
+    print(output.grad_fn)
+    output.backward(torch.ones((6, 1)))
+    for param in test_critic.parameters():
+        print(param.grad)
 
 if __name__ == "__main__":
     unit_test()
