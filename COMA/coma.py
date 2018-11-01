@@ -48,22 +48,22 @@ class COMA():
         self.joint_fixed_actions_pl = None
 
         # joint action of all agents, flattened
-        self.joint_action_pl = np.zeros((batch_size, seq_len, action_size*n_agents), dtype=np.float32)
+        self.joint_action_pl = torch.zeros((batch_size, seq_len, action_size*n_agents))
 
         # the global state
-        self.global_state_pl = np.zeros((batch_size, seq_len, state_size), dtype=np.float32)
+        self.global_state_pl = torch.zeros((batch_size, seq_len, state_size))
 
         # joint-action state pairs
-        self.joint_action_state_pl = None
+        self.joint_action_state_pl = torch.zeros((batch_size, seq_len, state_size+self.action_size*self.n_agents))
 
         # obs, prev_action pairs, one tensor for each agent
-        self.actor_input_pl = [np.zeros((batch_size, seq_len, obs_size+action_size), dtype=np.float32) for n in range(self.n_agents)]
+        self.actor_input_pl = [torch.zeros((batch_size, seq_len, obs_size+action_size)) for n in range(self.n_agents)]
 
         # sequence of future returns for each timestep G[t] = r[t] + discount * G[t+1] used as target for Q-fitting
-        self.return_seq_pl = np.zeros((batch_size, seq_len), dtype=np.float32)
+        self.return_seq_pl = np.zeros((batch_size, seq_len))
 
         # sequence of immediate rewards
-        self.reward_seq_pl = np.zeros((batch_size, seq_len), dtype=np.float32)
+        self.reward_seq_pl = np.zeros((batch_size, seq_len))
 
         # set up the modules for actor-critic
         self.actor = Actor(input_size=obs_size + action_size,
@@ -127,7 +127,10 @@ class COMA():
 
             loss = -torch.sum(torch.log(action_dist + EPS)*chosen_action, dim=-1)
             loss *= advantage[a].squeeze()
-            print('loss', torch.sum(loss))
+            print('a', a, 'loss', torch.sum(loss))
+            print('action_dist', action_dist)
+            print('advantage', advantage[a])
+
 
             # compute the gradients of the policy network using the advantage
             # do not use optimizer.zero_grad() since we want to accumulate the gradients for all agents
@@ -184,7 +187,7 @@ class COMA():
         weights = weights * (1 - lam) / (1 - lam ** self.seq_len)
 
         # should be 1
-        print(np.sum(weights))
+        # print(np.sum(weights))
 
         # Optimizer
         optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.005, eps=1e-08)
@@ -197,7 +200,7 @@ class COMA():
             print('pred', pred)
 
             loss = torch.mean(torch.pow(targets[:, t] - pred, 2))
-            print('loss', loss)
+            # print('loss', loss)
 
             # fit the Critic
             optimizer.zero_grad()
