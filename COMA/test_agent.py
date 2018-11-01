@@ -12,4 +12,4 @@ class TestAgent:
     def step(self, obs):
         self.step_num += 1
         #self.step_num % 4
-        return (1, [np.random.randint(64), np.random.randint(64), 0]) #np.random.randint(self.num_enemies)])
+        return (0, [np.random.randint(64), np.random.randint(64), 0]) #np.random.randint(self.num_enemies)])
