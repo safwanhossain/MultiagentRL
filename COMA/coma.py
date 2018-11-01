@@ -90,7 +90,7 @@ class COMA():
         advantage = [q_vals.detach() for a in range(self.n_agents)]
 
         # Optimizer
-        optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.005, eps=1e-08)
+        optimizer = torch.optim.Adam(self.actor.parameters(), lr=0.005, eps=1e-08)
         optimizer.zero_grad()
 
         # computing baselines, by broadcasting across rollouts and time-steps
@@ -102,13 +102,16 @@ class COMA():
             # make a copy of the joint-action, state, to substitute different actions in it
             diff_actions.copy_(self.joint_action_state_pl)
 
+            # get the chosen action for each agent
+            action_index = a * self.action_size
+            chosen_action = self.joint_action_state_pl[:, :, action_index:action_index+self.action_size]
+
             # compute the baseline for that agent, by substituting different actions in the joint action
             for u in range(self.action_size):
                 action = torch.zeros(self.action_size)
                 action[u] = 1
 
                 # index into that agent's action to substitute a different one
-                action_index = a*self.action_size
                 diff_actions[:, :, action_index:action_index+self.action_size] = action
 
                 # get the Q value of that new joint action
@@ -117,19 +120,21 @@ class COMA():
                 advantage[a] -= Q_u*action_dist[:, :, u].unsqueeze_(-1)
 
             # loss is negative log of probability of chosen action, scaled by the advantage
+            # the advantage is treated as a scalar, so the gradient is computed only for log prob
             advantage[a] = advantage[a].detach()
             EPS = 1.0e-08
-            loss = -torch.log(action_dist + EPS) * advantage[a].squeeze()
-            print('a', a, 'loss', torch.sum(loss))
+            # print('advantage', advantage[a].squeeze().size(), 'chosen_action', chosen_action.size())
+
+            loss = -torch.sum(torch.log(action_dist + EPS)*chosen_action, dim=-1)
+            loss *= advantage[a].squeeze()
+            print('loss', torch.sum(loss))
 
             # compute the gradients of the policy network using the advantage
             # do not use optimizer.zero_grad() since we want to accumulate the gradients for all agents
             loss.backward(torch.ones(self.batch_size, self.seq_len))
 
-            optimizer.zero_grad()
-            # after computing the gradient for all agents, perform a weight update on the policy network
-            optimizer.step()
-
+        # after computing the gradient for all agents, perform a weight update on the policy network
+        optimizer.step()
 
 
     def fit_critic(self, lam):
