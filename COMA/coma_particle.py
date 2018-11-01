@@ -17,6 +17,7 @@ def gather_rollouts(coma, eps):
     for i in range(coma.batch_size):
         done = False
         joint_action = torch.zeros((coma.n_agents, coma.action_size))
+        joint_action[:, 0] = 1
         coma.env.reset()
 
         for t in range(coma.seq_len):
@@ -74,7 +75,7 @@ if __name__ == "__main__":
                      state_size=18, h_size=16)
 
 
-    for e in range(20):
+    for e in range(2):
 
         gather_rollouts(coma, eps=0.05 - e*0.0025)
         coma.fit_critic(lam=0.5)

@@ -82,12 +82,16 @@ class COMA():
         """
 
         # first get the Q value for the joint actions
+        # print('q input', self.joint_action_state_pl[0, :, :])
+
         q_vals = self.critic.forward(self.joint_action_state_pl)
+
+        # print("q_vals", q_vals)
 
         diff_actions = torch.zeros_like(self.joint_action_state_pl)
 
-        # initialize the advantage for each agent
-        advantage = [q_vals.detach() for a in range(self.n_agents)]
+        # initialize the advantage for each agent, by copying the Q values
+        advantage = [q_vals.clone().detach() for a in range(self.n_agents)]
 
         # Optimizer
         optimizer = torch.optim.Adam(self.actor.parameters(), lr=0.005, eps=1e-08)
@@ -217,6 +221,7 @@ class COMA():
         for i in range(self.batch_size):
             done = False
             joint_action = np.zeros((self.n_agents, self.action_size))
+            joint_action[:, 0] = 1
             env.reset()
 
             for t in range(self.seq_len):
