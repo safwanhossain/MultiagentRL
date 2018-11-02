@@ -22,10 +22,7 @@ class GlobalCritic(torch.nn.Module):
         super(GlobalCritic, self).__init__()
         self.input_size = input_size
 
-        self.linear1 = nn.Sequential(
-                nn.Linear(input_size, hidden_size),
-                nn.Tanh()
-        )
+        self.linear1 = nn.Linear( self.input_size, hidden_size)
         self.linear2 = nn.Linear(hidden_size, hidden_size)
 
         self.linear3 = nn.Linear(hidden_size, 1)

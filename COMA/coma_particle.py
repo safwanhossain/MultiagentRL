@@ -105,14 +105,15 @@ if __name__ == "__main__":
                      state_size=18, h_size=32)
 
 
-    for e in range(200):
+    for e in range(2000):
         print('e', e)
 
         if e % 20 == 0:
             coma.update_target()
+            visualize(coma)
 
         gather_rollouts(coma, eps=0.05 - e*0.00025)
-        visualize(coma)
+
         print('gathered rollouts')
         coma.fit_critic(lam=0.8)
         coma.fit_actor(eps=0.05 - e*0.00025)
