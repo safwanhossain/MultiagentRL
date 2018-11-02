@@ -63,6 +63,36 @@ def gather_rollouts(coma, eps):
     coma.joint_action_state_pl = torch.cat((coma.joint_action_pl, coma.global_state_pl), dim=-1)
 
     coma.joint_action_state_pl.requires_grad_(True)
+    print('reward', np.mean(coma.reward_seq_pl))
+
+def visualize(coma):
+
+    joint_action = torch.zeros((coma.n_agents, coma.action_size))
+    joint_action[:, 0] = 1
+    coma.env.reset()
+
+    for t in range(coma.seq_len):
+        coma.env.render()
+        # get observations
+        obs_n, reward_n, done_n, info_n = env.step(joint_action)
+
+        # reset the joint action, one-hot representation
+        joint_action = np.zeros((coma.n_agents, coma.action_size))
+
+        # for each agent, save observation, compute next action
+        for n in range(coma.n_agents):
+
+            # get distribution over actions
+            obs_action = np.concatenate((obs_n[n][0:coma.obs_size], joint_action[n, :]))
+            actor_input = torch.from_numpy(obs_action).view(1, 1, -1).type(torch.FloatTensor)
+
+            pi = coma.actor.forward(actor_input, eps=0)
+
+            # sample action from pi, convert to one-hot vector
+            action_idx = (torch.multinomial(pi[0, 0, :], num_samples=1)).numpy()
+            action = np.zeros(coma.action_size)
+            action[action_idx] = 1
+            joint_action[n, :] = action
 
 if __name__ == "__main__":
 
@@ -71,14 +101,21 @@ if __name__ == "__main__":
     n_agents = 3
     n_landmarks = 3
 
-    coma = COMA(env=env, batch_size=1, seq_len=13, discount=0.8, n_agents=3, action_size=5, obs_size=14,
-                     state_size=18, h_size=16)
+    coma = COMA(env=env, batch_size=20, seq_len=15, discount=0.8, n_agents=3, action_size=5, obs_size=14,
+                     state_size=18, h_size=32)
 
 
-    for e in range(2):
+    for e in range(200):
+        print('e', e)
 
-        gather_rollouts(coma, eps=0.05 - e*0.0025)
-        coma.fit_critic(lam=0.5)
-        coma.fit_actor(eps=0.05)
+        if e % 20 == 0:
+            coma.update_target()
+
+        gather_rollouts(coma, eps=0.05 - e*0.00025)
+        visualize(coma)
+        print('gathered rollouts')
+        coma.fit_critic(lam=0.8)
+        coma.fit_actor(eps=0.05 - e*0.00025)
+
 
 

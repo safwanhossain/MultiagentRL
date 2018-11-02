@@ -35,8 +35,8 @@ class GlobalCritic(torch.nn.Module):
         :param state_action: joint action, global state
         :return: Q-value for the joint state
         """
-        h = torch.tanh(self.linear1(state_action))
-        h = torch.tanh(self.linear2(h))
+        h = torch.relu(self.linear1(state_action))
+        h = torch.relu(self.linear2(h))
         return self.linear3(h)
 
 def unit_test():

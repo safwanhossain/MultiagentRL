@@ -70,9 +70,16 @@ class COMA():
                            h_size=h_size,
                            action_size = action_size)
 
-        self.critic = GlobalCritic(input_size=action_size*(n_agents) + state_size,
-                         hidden_size=100)
+        self.critic = GlobalCritic(input_size=action_size*(n_agents) + state_size, hidden_size=100)
 
+        self.target_critic = GlobalCritic(input_size=action_size*(n_agents) + state_size, hidden_size=100)
+
+    def update_target(self):
+        """
+        Updates the target network with the critic's weights
+        :return:
+        """
+        self.target_critic.load_state_dict(self.critic.state_dict())
 
     def fit_actor(self, eps):
         """
@@ -94,7 +101,7 @@ class COMA():
         advantage = [q_vals.clone().detach() for a in range(self.n_agents)]
 
         # Optimizer
-        optimizer = torch.optim.Adam(self.actor.parameters(), lr=0.005, eps=1e-08)
+        optimizer = torch.optim.Adam(self.actor.parameters(), lr=0.0005, eps=1e-08)
         optimizer.zero_grad()
 
         # computing baselines, by broadcasting across rollouts and time-steps
@@ -131,9 +138,9 @@ class COMA():
 
             loss = -torch.sum(torch.log(action_dist + EPS)*chosen_action, dim=-1)
             loss *= advantage[a].squeeze()
-            print('a', a, 'loss', torch.sum(loss))
-            print('action_dist', action_dist)
-            print('advantage', advantage[a])
+            # print('a', a, 'loss', torch.sum(loss))
+            # print('action_dist', action_dist)
+            # print('advantage', advantage[a])
 
 
             # compute the gradients of the policy network using the advantage
@@ -162,7 +169,7 @@ class COMA():
         # print(total_return[0])
 
         # initialize the first column with estimates from the Q network
-        predictions = self.critic.forward(self.joint_action_state_pl).squeeze()
+        predictions = self.target_critic.forward(self.joint_action_state_pl).squeeze()
 
         # use detach to assign to numpy array
         G[:, :, 0] = predictions.detach().numpy()
@@ -197,11 +204,11 @@ class COMA():
         optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.005, eps=1e-08)
 
         for t in range(self.seq_len-1, -1, -1):
-            print('t', t)
+            # print('t', t)
             targets[:, t] = torch.from_numpy(G[:, t, 1:].dot(weights))
-            print('target', targets[:, t])
+            # print('target', targets[:, t])
             pred = self.critic.forward(self.joint_action_state_pl[:, t]).squeeze()
-            print('pred', pred)
+            # print('pred', pred)
 
             loss = torch.mean(torch.pow(targets[:, t] - pred, 2))
             # print('loss', loss)
@@ -211,63 +218,6 @@ class COMA():
             loss.backward()
             optimizer.step()
 
-    def gather_rollouts(self, eps):
-        """
-        gathers rollouts under the current policy
-        :param eps:
-        :return:
-        """
-        # Step 1: generate batch_size rollouts
-        for i in range(self.batch_size):
-            done = False
-            joint_action = np.zeros((self.n_agents, self.action_size))
-            joint_action[:, 0] = 1
-            env.reset()
-
-            for t in range(self.seq_len):
-
-                # get observations
-                obs_n, reward_n, done_n, info_n = env.step(joint_action)
-
-                # they all get the same reward, save the reward
-                self.reward_seq_pl[i, t] = reward_n[0]
-
-                # save the joint action
-                self.joint_action_pl[i, t, :] = joint_action.flatten()
-
-                # reset the joint action, one-hot representation
-                joint_action = np.zeros((self.n_agents, self.action_size))
-
-                # for each agent, save observation, compute next action
-                for n in range(self.n_agents):
-
-                    # use the observation to construct global state
-                    # the global state consists of positions + velocity of agents, first 4 elements from obs
-                    self.global_state_pl[i, t, n*4:4*n+4] = obs_n[n][0:4]
-
-                    # get distribution over actions
-                    obs_action = np.concatenate((obs_n[n][0:self.obs_size], joint_action[n, :]))
-                    actor_input = torch.from_numpy(obs_action).view(1, 1, -1).type(torch.FloatTensor)
-
-                    # save the actor input for training
-                    self.actor_input_pl[n][i, t, :] = actor_input
-
-                    pi = self.actor.forward(actor_input, eps)
-
-                    # sample action from pi, convert to one-hot vector
-                    action_idx = (torch.multinomial(pi[0, 0, :], num_samples=1)).numpy()
-                    action = np.zeros(self.action_size)
-                    action[action_idx] = 1
-                    joint_action[n, :] = action
-
-                # get the absolute landmark positions for the global state
-                self.global_state_pl[i, t, self.n_agents*4:] = np.array([landmark.state.p_pos for landmark in self.env.world.landmarks]).flatten()
-
-        # concatenate the joint action, global state, set network inputs to torch tensors
-        self.joint_action_state_pl = torch.from_numpy(np.concatenate((self.joint_action_pl, self.global_state_pl), axis=-1))
-        self.joint_action_state_pl.requires_grad_(True)
-
-        self.actor_input_pl = [torch.from_numpy(self.actor_input_pl[i]) for i in range(self.n_agents)]
 
 def unit_test():
     n_agents = 3
