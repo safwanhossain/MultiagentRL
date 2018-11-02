@@ -15,24 +15,22 @@ def gather_rollouts(coma, eps):
     """
     # Step 1: generate batch_size rollouts
     for i in range(coma.batch_size):
-        done = False
+
+        # initialize action to noop
         joint_action = torch.zeros((coma.n_agents, coma.action_size))
         joint_action[:, 0] = 1
         coma.env.reset()
 
         for t in range(coma.seq_len):
 
-            # get observations
+            # get observations, by executing current joint action
             obs_n, reward_n, done_n, info_n = coma.env.step(joint_action)
 
             # they all get the same reward, save the reward
             coma.reward_seq_pl[i, t] = reward_n[0]
 
-            # save the joint action
+            # save the joint action for training
             coma.joint_action_pl[i, t, :] = joint_action.flatten()
-
-            # reset the joint action, one-hot representation
-            joint_action.fill_(0)
 
             # for each agent, save observation, compute next action
             for n in range(coma.n_agents):
@@ -44,7 +42,7 @@ def gather_rollouts(coma, eps):
                 # the global state consists of positions + velocity of agents, first 4 elements from obs
                 coma.global_state_pl[i, t, n * 4:4 * n + 4] = torch.from_numpy(obs_n[n][0:4])
 
-                # get distribution over actions
+                # get distribution over actions, concatenate observation and prev action
                 obs_action = np.concatenate((obs_n[n][0:coma.obs_size], joint_action[n, :], agent_idx))
                 actor_input = torch.from_numpy(obs_action).view(1, 1, -1).type(torch.FloatTensor)
 
@@ -67,7 +65,8 @@ def gather_rollouts(coma, eps):
     coma.joint_action_state_pl = torch.cat((coma.joint_action_pl, coma.global_state_pl), dim=-1)
 
     coma.joint_action_state_pl.requires_grad_(True)
-    print('reward', np.mean(coma.reward_seq_pl))
+    # print the reward at the last timestep
+    print('reward', np.mean(coma.reward_seq_pl[:, -1]))
 
 def visualize(coma):
 
@@ -108,7 +107,7 @@ if __name__ == "__main__":
     n_agents = 3
     n_landmarks = 3
 
-    coma = COMA(env=env, batch_size=20, seq_len=15, discount=0.8, n_agents=3, action_size=5, obs_size=14,
+    coma = COMA(env=env, batch_size=20, seq_len=20, discount=0.8, n_agents=3, action_size=5, obs_size=14,
                      state_size=18, h_size=32)
 
 
