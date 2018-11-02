@@ -36,12 +36,16 @@ def gather_rollouts(coma, eps):
 
             # for each agent, save observation, compute next action
             for n in range(coma.n_agents):
+                # one-hot agent index
+                agent_idx = np.zeros(coma.n_agents)
+                agent_idx[n] = 1
+
                 # use the observation to construct global state
                 # the global state consists of positions + velocity of agents, first 4 elements from obs
                 coma.global_state_pl[i, t, n * 4:4 * n + 4] = torch.from_numpy(obs_n[n][0:4])
 
                 # get distribution over actions
-                obs_action = np.concatenate((obs_n[n][0:coma.obs_size], joint_action[n, :]))
+                obs_action = np.concatenate((obs_n[n][0:coma.obs_size], joint_action[n, :], agent_idx))
                 actor_input = torch.from_numpy(obs_action).view(1, 1, -1).type(torch.FloatTensor)
 
                 # save the actor input for training
@@ -81,9 +85,12 @@ def visualize(coma):
 
         # for each agent, save observation, compute next action
         for n in range(coma.n_agents):
+            # one-hot agent index
+            agent_idx = np.zeros(coma.n_agents)
+            agent_idx[n] = 1
 
             # get distribution over actions
-            obs_action = np.concatenate((obs_n[n][0:coma.obs_size], joint_action[n, :]))
+            obs_action = np.concatenate((obs_n[n][0:coma.obs_size], joint_action[n, :], agent_idx))
             actor_input = torch.from_numpy(obs_action).view(1, 1, -1).type(torch.FloatTensor)
 
             pi = coma.actor.forward(actor_input, eps=0)

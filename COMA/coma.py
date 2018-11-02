@@ -57,7 +57,7 @@ class COMA():
         self.joint_action_state_pl = torch.zeros((batch_size, seq_len, state_size+self.action_size*self.n_agents))
 
         # obs, prev_action pairs, one tensor for each agent
-        self.actor_input_pl = [torch.zeros((batch_size, seq_len, obs_size+action_size)) for n in range(self.n_agents)]
+        self.actor_input_pl = [torch.zeros((batch_size, seq_len, obs_size+action_size+n_agents)) for n in range(self.n_agents)]
 
         # sequence of future returns for each timestep G[t] = r[t] + discount * G[t+1] used as target for Q-fitting
         self.return_seq_pl = np.zeros((batch_size, seq_len))
@@ -66,7 +66,8 @@ class COMA():
         self.reward_seq_pl = np.zeros((batch_size, seq_len))
 
         # set up the modules for actor-critic
-        self.actor = Actor(input_size=obs_size + action_size,
+        # actor takes in agent index as well
+        self.actor = Actor(input_size=obs_size + action_size + n_agents,
                            h_size=h_size,
                            action_size = action_size)
 
