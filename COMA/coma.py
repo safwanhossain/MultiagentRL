@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import torch.nn as nn
 from global_critic import GlobalCritic
-from actor import Actor
+from actor import MLPActor, GRUActor
 import marl_env
 
 
@@ -67,7 +67,7 @@ class COMA():
 
         # set up the modules for actor-critic
         # actor takes in agent index as well
-        self.actor = Actor(input_size=obs_size + action_size + n_agents,
+        self.actor = GRUActor(input_size=obs_size + action_size + n_agents,
                            h_size=h_size,
                            action_size = action_size)
 
@@ -102,7 +102,7 @@ class COMA():
         advantage = [q_vals.clone().detach() for a in range(self.n_agents)]
 
         # Optimizer
-        optimizer = torch.optim.Adam(self.actor.parameters(), lr=0.0005, eps=1e-08)
+        optimizer = torch.optim.Adam(self.actor.parameters(), lr=0.0001, eps=1e-08)
         optimizer.zero_grad()
 
         # computing baselines, by broadcasting across rollouts and time-steps
@@ -202,7 +202,7 @@ class COMA():
         # print(np.sum(weights))
 
         # Optimizer
-        optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.005, eps=1e-08)
+        optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.0005, eps=1e-08)
 
         for t in range(self.seq_len-1, -1, -1):
             # print('t', t)
@@ -224,7 +224,7 @@ def unit_test():
     n_agents = 3
     n_landmarks = 3
 
-    test_coma = COMA(env=env, batch_size=1, seq_len=13, discount=0.8, n_agents=3, action_size=5, obs_size=14, state_size=18, h_size=16)
+    test_coma = COMA(env=env, batch_size=1, seq_len=30, discount=0.9, n_agents=3, action_size=5, obs_size=14, state_size=18, h_size=16)
     test_coma.gather_rollouts(eps=0.05)
     print(test_coma.actor_input_pl[0].shape)
     print(test_coma.reward_seq_pl.shape)

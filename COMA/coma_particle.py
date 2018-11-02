@@ -108,20 +108,20 @@ if __name__ == "__main__":
     n_landmarks = 3
 
     coma = COMA(env=env, batch_size=20, seq_len=20, discount=0.8, n_agents=3, action_size=5, obs_size=14,
-                     state_size=18, h_size=32)
+                     state_size=18, h_size=128)
 
 
     for e in range(2000):
         print('e', e)
 
-        if e % 20 == 0:
+        if e % 10 == 0:
             coma.update_target()
             visualize(coma)
 
         gather_rollouts(coma, eps=0.05 - e*0.00025)
 
         print('gathered rollouts')
-        coma.fit_critic(lam=0.8)
+        coma.fit_critic(lam=0.5)
         coma.fit_actor(eps=0.05 - e*0.00025)
 
 

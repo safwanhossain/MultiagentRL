@@ -13,12 +13,12 @@ class Actor_Policy():
     def action(self, obs):
         actions = self.actor_network(obs, eps=0.1)
         
-class Actor(torch.nn.Module):
+class GRUActor(torch.nn.Module):
     ''' This network, takes in observations, and returns an action. Action space is discrete,
     '''
 
     def __init__(self, input_size, h_size, action_size):
-        super(Actor, self).__init__()
+        super(GRUActor, self).__init__()
         self.input_size = input_size
         self.action_size = action_size
         self.h_size = h_size
@@ -50,8 +50,39 @@ class Actor(torch.nn.Module):
         softmax = torch.nn.functional.softmax(logits, dim=2)
         return (1 - eps) * softmax + eps / self.action_size
 
+class MLPActor(torch.nn.Module):
+
+    def __init__(self, input_size, h_size, action_size):
+        super(MLPActor, self).__init__()
+        self.input_size = input_size
+        self.action_size = action_size
+        self.h_size = h_size
+
+        self.model = torch.nn.Sequential(
+            torch.nn.Linear(input_size, h_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(h_size, h_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(h_size, action_size))
+
+    def forward(self, input, eps):
+        """
+        outputs prob dist over possible actions, using an eps-bounded softmax for exploration
+        input sequence shape is batch-first
+        :param obs_seq: a sequence of shape (batch, seq_len, input_size)
+        where input_size refers to size of [obs, prev_action]
+        :param eps: softmax lower bound, for exploration
+        :return:
+        """
+
+        logits = self.model.forward(input)
+
+        # compute eps-bounded softmax
+        softmax = torch.nn.functional.softmax(logits, dim=2)
+        return (1 - eps) * softmax + eps / self.action_size
+
 def unit_test():
-    test_actor = Actor(input_size=14, h_size=128, action_size=5)
+    test_actor = MLPActor(input_size=14, h_size=128, action_size=5)
     obs_seq = torch.randn((10, 6, 14))
     output = test_actor.forward(obs_seq, eps=0.01)
     if output.shape == (10, 6, 5):
