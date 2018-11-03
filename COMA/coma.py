@@ -71,9 +71,9 @@ class COMA():
                            h_size=h_size,
                            action_size = action_size)
 
-        self.critic = GlobalCritic(input_size=action_size*(n_agents) + state_size, hidden_size=100)
+        self.critic = GlobalCritic(input_size=action_size*(n_agents) + state_size, hidden_size=128)
 
-        self.target_critic = GlobalCritic(input_size=action_size*(n_agents) + state_size, hidden_size=100)
+        self.target_critic = GlobalCritic(input_size=action_size*(n_agents) + state_size, hidden_size=128)
 
     def update_target(self):
         """
@@ -102,8 +102,10 @@ class COMA():
         advantage = [q_vals.clone().detach() for a in range(self.n_agents)]
 
         # Optimizer
-        optimizer = torch.optim.Adam(self.actor.parameters(), lr=0.0001, eps=1e-08)
+        optimizer = torch.optim.Adam(self.actor.parameters(), lr=0.0002, eps=1e-08)
         optimizer.zero_grad()
+
+        sum_loss = 0.0
 
         # computing baselines, by broadcasting across rollouts and time-steps
         for a in range(self.n_agents):
@@ -143,13 +145,14 @@ class COMA():
             # print('action_dist', action_dist)
             # print('advantage', advantage[a])
 
-
+            sum_loss += torch.mean(loss).data[0]
             # compute the gradients of the policy network using the advantage
             # do not use optimizer.zero_grad() since we want to accumulate the gradients for all agents
             loss.backward(torch.ones(self.batch_size, self.seq_len))
 
         # after computing the gradient for all agents, perform a weight update on the policy network
         optimizer.step()
+        return sum_loss
 
 
     def fit_critic(self, lam):
@@ -202,7 +205,9 @@ class COMA():
         # print(np.sum(weights))
 
         # Optimizer
-        optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.0005, eps=1e-08)
+        optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.005, eps=1e-08)
+
+        sum_loss = 0.
 
         for t in range(self.seq_len-1, -1, -1):
             # print('t', t)
@@ -212,13 +217,14 @@ class COMA():
             # print('pred', pred)
 
             loss = torch.mean(torch.pow(targets[:, t] - pred, 2))
+            sum_loss += loss.data[0]
             # print('loss', loss)
 
             # fit the Critic
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
+        return  sum_loss
 
 def unit_test():
     n_agents = 3

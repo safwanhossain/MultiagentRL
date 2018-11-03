@@ -4,7 +4,9 @@ Train agents for particle environment using COMA
 from coma import COMA
 import marl_env
 import torch
+import time
 import numpy as np
+import matplotlib.pyplot as plt
 
 def gather_rollouts(coma, eps):
     """
@@ -66,7 +68,8 @@ def gather_rollouts(coma, eps):
 
     coma.joint_action_state_pl.requires_grad_(True)
     # print the reward at the last timestep
-    print('reward', np.mean(coma.reward_seq_pl[:, -1]))
+    # print('reward', np.mean(np.sum(coma.reward_seq_pl, axis=1)))
+    return np.mean(np.sum(coma.reward_seq_pl, axis=1))
 
 def visualize(coma):
 
@@ -76,6 +79,7 @@ def visualize(coma):
 
     for t in range(coma.seq_len):
         coma.env.render()
+        time.sleep(0.25)
         # get observations
         obs_n, reward_n, done_n, info_n = env.step(joint_action)
 
@@ -107,22 +111,41 @@ if __name__ == "__main__":
     n_agents = 3
     n_landmarks = 3
 
-    coma = COMA(env=env, batch_size=20, seq_len=20, discount=0.8, n_agents=3, action_size=5, obs_size=14,
-                     state_size=18, h_size=128)
+    coma = COMA(env=env, batch_size=30, seq_len=20, discount=0.9, n_agents=1, action_size=5, obs_size=6,
+                     state_size=6, h_size=128)
+
+    rewards = []
+    actor_loss = []
+    critic_loss = []
+    # visualize(coma)
+    try:
+        for e in range(2000):
 
 
-    for e in range(2000):
-        print('e', e)
+            if e % 20 == 0:
+                print('e', e)
+                coma.update_target()
 
-        if e % 10 == 0:
-            coma.update_target()
-            visualize(coma)
 
-        gather_rollouts(coma, eps=0.05 - e*0.00025)
+            r = gather_rollouts(coma, eps=max(0.5 - e*0.0005, 0.01))
 
-        print('gathered rollouts')
-        coma.fit_critic(lam=0.5)
-        coma.fit_actor(eps=0.05 - e*0.00025)
+            cl = coma.fit_critic(lam=0.5)
+            al = coma.fit_actor(eps=0.05 - e*0.00025)
+
+            print("reward: {0:5.2f}, actor loss: {1:5.2f}, critic loss: {2:5.2f}".format(r, al, cl))
+            rewards.append(r)
+            actor_loss.append(al)
+            critic_loss.append(cl)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        plt.plot(rewards, 'b')
+        plt.plot(al, 'g')
+        plt.plot(cl, 'r')
+        plt.show()
+        # visualize(coma)
+
+
 
 
 
