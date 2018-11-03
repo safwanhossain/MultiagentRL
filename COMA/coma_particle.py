@@ -134,8 +134,8 @@ if __name__ == "__main__":
 
             print("reward: {0:5.2f}, actor loss: {1:5.2f}, critic loss: {2:5.2f}".format(r, al, cl))
             rewards.append(r)
-            actor_loss.append(al)
-            critic_loss.append(cl)
+            actor_loss.append(al.tolist())
+            critic_loss.append(cl.tolist())
     except KeyboardInterrupt:
         pass
     finally:
