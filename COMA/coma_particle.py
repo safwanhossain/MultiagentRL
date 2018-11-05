@@ -111,7 +111,7 @@ if __name__ == "__main__":
     n_agents = 3
     n_landmarks = 3
 
-    coma = COMA(env=env, batch_size=30, seq_len=20, discount=0.9, n_agents=1, action_size=5, obs_size=6,
+    coma = COMA(env=env, batch_size=50, seq_len=20, discount=0.9, n_agents=1, action_size=5, obs_size=6,
                      state_size=6, h_size=128)
 
     rewards = []
@@ -119,7 +119,7 @@ if __name__ == "__main__":
     critic_loss = []
     # visualize(coma)
     try:
-        for e in range(2000):
+        for e in range(10000):
 
 
             if e % 20 == 0:
@@ -127,23 +127,23 @@ if __name__ == "__main__":
                 coma.update_target()
 
 
-            r = gather_rollouts(coma, eps=max(0.5 - e*0.0005, 0.01))
+            r = gather_rollouts(coma, eps=max(0.5 - e*0.0005, 0.001))
 
             cl = coma.fit_critic(lam=0.5)
-            al = coma.fit_actor(eps=0.05 - e*0.00025)
+            al = coma.fit_actor(eps=max(0.5 - e*0.0005, 0.001))
 
             print("reward: {0:5.2f}, actor loss: {1:5.2f}, critic loss: {2:5.2f}".format(r, al, cl))
             rewards.append(r)
-            actor_loss.append(al.tolist())
-            critic_loss.append(cl.tolist())
+            actor_loss.append(al)
+            critic_loss.append(cl)
     except KeyboardInterrupt:
         pass
     finally:
         plt.plot(rewards, 'b')
-        plt.plot(al, 'g')
-        plt.plot(cl, 'r')
+        plt.plot(actor_loss, 'g')
+        plt.plot(critic_loss, 'r')
         plt.show()
-        # visualize(coma)
+        visualize(coma)
 
 
 

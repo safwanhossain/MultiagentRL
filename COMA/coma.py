@@ -102,7 +102,7 @@ class COMA():
         advantage = [q_vals.clone().detach() for a in range(self.n_agents)]
 
         # Optimizer
-        optimizer = torch.optim.Adam(self.actor.parameters(), lr=0.0002, eps=1e-08)
+        optimizer = torch.optim.Adam(self.actor.parameters(), lr=0.0005, eps=1e-08)
         optimizer.zero_grad()
 
         sum_loss = 0.0
@@ -145,7 +145,7 @@ class COMA():
             # print('action_dist', action_dist)
             # print('advantage', advantage[a])
 
-            sum_loss += torch.mean(loss).data[0]
+            sum_loss += torch.mean(loss).item()
             # compute the gradients of the policy network using the advantage
             # do not use optimizer.zero_grad() since we want to accumulate the gradients for all agents
             loss.backward(torch.ones(self.batch_size, self.seq_len))
@@ -217,7 +217,7 @@ class COMA():
             # print('pred', pred)
 
             loss = torch.mean(torch.pow(targets[:, t] - pred, 2))
-            sum_loss += loss.data[0]
+            sum_loss += loss.item()
             # print('loss', loss)
 
             # fit the Critic
