@@ -59,7 +59,6 @@ class Global_Critic(torch.nn.Module):
         for i in range(len(observation_vector)):
             combined = torch.cat([observation_vector[i], action_vector[i]], dim=1)
             ei_s.append(self.g_functions[i](combined))
-        print(ei_s[0].shape)
 
         xi_s = []
         for i in range(len(observation_vector)):    # for each x_i
@@ -72,7 +71,7 @@ class Global_Critic(torch.nn.Module):
                         key = self.Wk_layers[l](ei_s[j])
                         alpha_j = torch.zeros(batch_size, 1)
                         for b in range(batch_size):
-                            alpha_j[b,:] = torch.nn.functional.softmax(key[b,:].dot(query[b,:]))
+                            alpha_j[b,:] = torch.nn.functional.softmax(key[b,:].dot(query[b,:]), dim=0)
                         assert(alpha_j.shape == (batch_size,1))
                         v_j = torch.nn.functional.leaky_relu(self.V_layers[l](ei_s[j]))
                         total += torch.mul(alpha_j,v_j)
@@ -89,12 +88,18 @@ class Global_Critic(torch.nn.Module):
         return q_for_agent
 
 def unit_test():
-    critic = Global_Critic(observation_size=10, action_size=5, num_agents=3)
-    obs_vector = [torch.randn((20, 10)) for i in range(3)]
-    action_vector = [torch.randn((20, 5)) for i in range(3)]
+    batch_size = 20
+    agents = 3
+
+    critic = Global_Critic(observation_size=10, action_size=5, num_agents=agents)
+    obs_vector = [torch.randn((batch_size, 10)) for i in range(agents)]
+    action_vector = [torch.randn((batch_size, 5)) for i in range(agents)]
     output = critic.forward(obs_vector, action_vector)
     
-    print(output[0].shape)
+    assert(len(output) == agents)
+    assert(output[0].shape == (batch_size,1))
+    print("PASSED")
+
 
 if __name__ == "__main__":
     unit_test()
