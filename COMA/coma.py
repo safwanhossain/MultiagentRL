@@ -139,19 +139,23 @@ class COMA():
             EPS = 1.0e-08
             # print('advantage', advantage[a].squeeze().size(), 'chosen_action', chosen_action.size())
 
+            # sum along the action dim, left with log loss for chosen action
             loss = -torch.sum(torch.log(action_dist + EPS)*chosen_action, dim=-1)
             loss *= advantage[a].squeeze()
-            # print('a', a, 'loss', torch.sum(loss))
+
+            print('a', a, 'action_dist', (action_dist[0, 0, :] + EPS))
             # print('action_dist', action_dist)
-            # print('advantage', advantage[a])
+            print('advantage', torch.mean(advantage[a]))
 
             sum_loss += torch.mean(loss).data[0]
             # compute the gradients of the policy network using the advantage
             # do not use optimizer.zero_grad() since we want to accumulate the gradients for all agents
             loss.backward(torch.ones(self.batch_size, self.seq_len))
 
-        # after computing the gradient for all agents, perform a weight update on the policy network
-        optimizer.step()
+            # after computing the gradient for all agents, perform a weight update on the policy network
+            optimizer.step()
+            optimizer.zero_grad()
+
         return sum_loss
 
 
@@ -172,7 +176,7 @@ class COMA():
 
         # print(total_return[0])
 
-        # initialize the first column with estimates from the Q network
+        # initialize the first column with estimates from the target Q network
         predictions = self.target_critic.forward(self.joint_action_state_pl).squeeze()
 
         # use detach to assign to numpy array
@@ -195,28 +199,26 @@ class COMA():
         # compute target at timestep t
         targets = torch.zeros((self.batch_size, self.seq_len), dtype=torch.float32)
 
-        # vector of powers of lambda
-        weights = np.fromfunction(lambda i: lam**i, shape=(self.seq_len,))
-
-        # normalize
-        weights = weights * (1 - lam) / (1 - lam ** self.seq_len)
-
-        # should be 1
-        # print(np.sum(weights))
-
         # Optimizer
-        optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.005, eps=1e-08)
+        optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.0005, eps=1e-08)
 
         sum_loss = 0.
 
         for t in range(self.seq_len-1, -1, -1):
-            # print('t', t)
-            targets[:, t] = torch.from_numpy(G[:, t, 1:].dot(weights))
-            # print('target', targets[:, t])
-            pred = self.critic.forward(self.joint_action_state_pl[:, t]).squeeze()
-            # print('pred', pred)
 
-            loss = torch.mean(torch.pow(targets[:, t] - pred, 2))
+            # vector of powers of lambda
+            weights = np.fromfunction(lambda i: lam ** i, shape=(self.seq_len - t,))
+
+            # normalize
+            weights = weights / np.sum(weights)
+
+            print('t', t)
+            targets[:, t] = torch.from_numpy(G[:, t, 1:self.seq_len-t+1].dot(weights))
+            print('target', targets[0, t])
+            pred = self.critic.forward(self.joint_action_state_pl[:, t]).squeeze()
+            print('pred', pred[0])
+
+            loss = torch.mean(torch.pow(targets[:, t] - pred, 2)) / self.seq_len
             sum_loss += loss.data[0]
             # print('loss', loss)
 
@@ -224,7 +226,7 @@ class COMA():
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-        return  sum_loss
+        return  sum_loss / self.seq_len
 
 def unit_test():
     n_agents = 3

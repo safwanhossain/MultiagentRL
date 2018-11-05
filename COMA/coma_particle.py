@@ -69,7 +69,7 @@ def gather_rollouts(coma, eps):
     coma.joint_action_state_pl.requires_grad_(True)
     # print the reward at the last timestep
     # print('reward', np.mean(np.sum(coma.reward_seq_pl, axis=1)))
-    return np.mean(np.sum(coma.reward_seq_pl, axis=1))
+    return np.mean(coma.reward_seq_pl)
 
 def visualize(coma):
 
@@ -77,9 +77,9 @@ def visualize(coma):
     joint_action[:, 0] = 1
     coma.env.reset()
 
-    for t in range(coma.seq_len):
-        coma.env.render()
-        time.sleep(0.25)
+    for t in range(60):
+        coma.env.render(mode="not human")
+        #time.sleep(0.25)
         # get observations
         obs_n, reward_n, done_n, info_n = env.step(joint_action)
 
@@ -106,12 +106,12 @@ def visualize(coma):
 
 if __name__ == "__main__":
 
-    env = marl_env.make_env('simple_spread')
+    env = marl_env.make_env('simple_spread', n_agents=1)
 
     n_agents = 3
     n_landmarks = 3
 
-    coma = COMA(env=env, batch_size=30, seq_len=20, discount=0.9, n_agents=1, action_size=5, obs_size=6,
+    coma = COMA(env=env, batch_size=30, seq_len=200, discount=0.99, n_agents=1, action_size=5, obs_size=6,
                      state_size=6, h_size=128)
 
     rewards = []
@@ -119,18 +119,28 @@ if __name__ == "__main__":
     critic_loss = []
     # visualize(coma)
     try:
-        for e in range(2000):
-
-
-            if e % 20 == 0:
+        # pretrain critic
+        for e in range(200):
+            gather_rollouts(coma, eps=max(0.5, 0.01))
+            if e % 10 == 0:
                 print('e', e)
                 coma.update_target()
 
+            cl = coma.fit_critic(lam=0.5)
+            print(cl)
+
+        for e in range(2000):
+            "Training Actor-Critic"
+
+            if e % 10 == 0:
+                print('e', e)
+                coma.update_target()
+                visualize(coma)
 
             r = gather_rollouts(coma, eps=max(0.5 - e*0.0005, 0.01))
 
-            cl = coma.fit_critic(lam=0.5)
-            al = coma.fit_actor(eps=0.05 - e*0.00025)
+            cl = coma.fit_critic(lam=0.8)
+            al = coma.fit_actor(eps=max(0.5 - e*0.0005, 0.01))
 
             print("reward: {0:5.2f}, actor loss: {1:5.2f}, critic loss: {2:5.2f}".format(r, al, cl))
             rewards.append(r)
