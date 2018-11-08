@@ -31,21 +31,14 @@ class COMA():
         :param h_size: size of GRU state
         """
         super(COMA, self).__init__()
-        self.params = {}
-        self.metrics = {}
-        self.params['batch_size'] = batch_size
-        self.params['seq_len'] = seq_len
-        self.params['discount'] = discount
-        self.params['h_size'] = h_size
-        self.params['actor_lr'] = 0.005
-        self.params['critic_lr'] = 0.005
-        self.metrics['mean_reward'] = 0.0
-        self.metrics['mean_actor_loss'] = 0.0
-        self.metrics['mean_critic_loss'] = 0.0
+        self.batch_size = batch_size
+        self.seq_len = seq_len
+        self.discount = discount
         self.n_agents = n_agents
         self.action_size = action_size
         self.obs_size = obs_size
         self.state_size = state_size
+        self.h_size = h_size
         self.env = env
 
         # Create "placeholders" for incoming training data (Sorry, tensorflow habit)
@@ -109,7 +102,7 @@ class COMA():
         advantage = [q_vals.clone().detach() for a in range(self.n_agents)]
 
         # Optimizer
-        optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.params['actor_lr'], eps=1e-08)
+        optimizer = torch.optim.Adam(self.actor.parameters(), lr=0.0005, eps=1e-08)
         optimizer.zero_grad()
 
         sum_loss = 0.0
@@ -146,20 +139,24 @@ class COMA():
             EPS = 1.0e-08
             # print('advantage', advantage[a].squeeze().size(), 'chosen_action', chosen_action.size())
 
+            # sum along the action dim, left with log loss for chosen action
             loss = -torch.sum(torch.log(action_dist + EPS)*chosen_action, dim=-1)
             loss *= advantage[a].squeeze()
-            # print('a', a, 'loss', torch.sum(loss))
+
+            print('a', a, 'action_dist', (action_dist[0, 0, :] + EPS))
             # print('action_dist', action_dist)
-            # print('advantage', advantage[a])
+            print('advantage', torch.mean(advantage[a]))
 
             sum_loss += torch.mean(loss).item()
             # compute the gradients of the policy network using the advantage
             # do not use optimizer.zero_grad() since we want to accumulate the gradients for all agents
-            loss.backward(torch.ones(self.params['batch_size'], self.params['seq_len']))
+            loss.backward(torch.ones(self.batch_size, self.seq_len))
 
-        # after computing the gradient for all agents, perform a weight update on the policy network
-        optimizer.step()
-        self.metrics['mean_actor_loss'] = sum_loss
+            # after computing the gradient for all agents, perform a weight update on the policy network
+            optimizer.step()
+            optimizer.zero_grad()
+
+        return sum_loss
 
 
     def fit_critic(self, lam):
@@ -168,69 +165,73 @@ class COMA():
         :param lam: lambda parameter used to average n-step targets
         :return:
         """
+
         # first compute the future discounted return at every step using the sequence of rewards
-        G = np.zeros((self.params['batch_size'], self.params['seq_len'], self.params['seq_len'] + 1))
+
+        G = np.zeros((self.batch_size, self.seq_len, self.seq_len + 1))
         # print('rewards', self.reward_seq_pl[0, :])
 
         # apply discount and sum
-        total_return = self.reward_seq_pl.dot(np.fromfunction(lambda i: self.params['discount']**i, shape=(self.params['seq_len'],)))
+        total_return = self.reward_seq_pl.dot(np.fromfunction(lambda i: self.discount**i, shape=(self.seq_len,)))
 
         # print(total_return[0])
 
-        # initialize the first column with estimates from the Q network
+        # initialize the first column with estimates from the target Q network
         predictions = self.target_critic.forward(self.joint_action_state_pl).squeeze()
 
         # use detach to assign to numpy array
         G[:, :, 0] = predictions.detach().numpy()
 
         # by moving backwards, construct the G matrix
-        for t in range(self.params['seq_len'] - 1, -1, -1):
+        for t in range(self.seq_len - 1, -1, -1):
 
             # loop from one-step lookahead to pure MC estimate
-            for n in range(1, self.params['seq_len'] + 1):
+            for n in range(1, self.seq_len + 1):
 
                 # pure MC
-                if t + n > self.params['seq_len'] - 1:
+                if t + n > self.seq_len - 1:
                     G[:, t, n] = total_return
 
                 # combination of MC + bootstrapping
                 else:
-                    G[:, t, n] = self.reward_seq_pl[:, t] + self.params['discount']*G[:, t+1, n-1]
+                    G[:, t, n] = self.reward_seq_pl[:, t] + self.discount*G[:, t+1, n-1]
 
         # compute target at timestep t
-        targets = torch.zeros((self.params['batch_size'], self.params['seq_len']), dtype=torch.float32)
-
-        # vector of powers of lambda
-        weights = np.fromfunction(lambda i: lam**i, shape=(self.params['seq_len'],))
-
-        # normalize
-        weights = weights * (1 - lam) / (1 - lam ** self.params['seq_len'])
-
-        # should be 1
-        # print(np.sum(weights))
+        targets = torch.zeros((self.batch_size, self.seq_len), dtype=torch.float32)
 
         # Optimizer
-        optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.params['critic_lr'], eps=1e-08)
+        optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.0005, eps=1e-08)
 
         sum_loss = 0.
 
-        for t in range(self.params['seq_len']-1, -1, -1):
-            # print('t', t)
-            targets[:, t] = torch.from_numpy(G[:, t, 1:].dot(weights))
-            # print('target', targets[:, t])
+        for t in range(self.seq_len-1, -1, -1):
+
+            # vector of powers of lambda
+            weights = np.fromfunction(lambda i: lam ** i, shape=(self.seq_len - t,))
+
+            # normalize
+            weights = weights / np.sum(weights)
+
+            print('t', t)
+            targets[:, t] = torch.from_numpy(G[:, t, 1:self.seq_len-t+1].dot(weights))
+            print('target', targets[0, t])
             pred = self.critic.forward(self.joint_action_state_pl[:, t]).squeeze()
-            # print('pred', pred)
+            print('pred', pred[0])
+
+
+            loss = torch.mean(torch.pow(targets[:, t] - pred, 2)) / self.seq_len
+            sum_loss += loss.data[0]
 
             loss = torch.mean(torch.pow(targets[:, t] - pred, 2))
             sum_loss += loss.item()
+
             # print('loss', loss)
 
             # fit the Critic
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
-        self.metrics['mean_critic_loss'] = sum_loss
+        return  sum_loss / self.seq_len
 
 def unit_test():
     n_agents = 3
