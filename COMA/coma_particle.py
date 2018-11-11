@@ -17,14 +17,14 @@ def gather_rollouts(coma, eps):
     :return:
     """
     # Step 1: generate batch_size rollouts
-    for i in range(coma.params['batch_size']):
+    for i in range(coma.batch_size):
 
         # initialize action to noop
         joint_action = torch.zeros((coma.n_agents, coma.action_size))
         joint_action[:, 0] = 1
         coma.env.reset()
 
-        for t in range(coma.params['seq_len']):
+        for t in range(coma.seq_len):
 
             # get observations, by executing current joint action
             obs_n, reward_n, done_n, info_n = coma.env.step(joint_action)
@@ -70,7 +70,7 @@ def gather_rollouts(coma, eps):
     coma.joint_action_state_pl.requires_grad_(True)
     # print the reward at the last timestep
     # print('reward', np.mean(np.sum(coma.reward_seq_pl, axis=1)))
-    coma.metrics['mean_reward'] = np.mean(np.sum(coma.reward_seq_pl, axis=1))
+    coma.metrics['mean_reward'] = np.mean(coma.reward_seq_pl)
 
 def visualize(coma):
 
@@ -78,7 +78,7 @@ def visualize(coma):
     joint_action[:, 0] = 1
     coma.env.reset()
 
-    for t in range(coma.params['seq_len']):
+    for t in range(coma.seq_len):
         coma.env.render()
         time.sleep(0.25)
         # get observations
@@ -107,24 +107,25 @@ def visualize(coma):
 
 if __name__ == "__main__":
 
-    env = marl_env.make_env('simple_spread')
+    n = 1
+    obs_size = 4 + 2*(n-1) + 2*n
+    state_size = 4*n + 2*n
 
-    n_agents = 3
-    n_landmarks = 3
+    env = marl_env.make_env('simple_spread', n_agents=n)
 
-    coma = COMA(env=env, batch_size=50, seq_len=20, discount=0.9, n_agents=2, action_size=5, obs_size=9,
-                     state_size=12, h_size=128)
+    coma = COMA(env=env, batch_size=50, seq_len=200, discount=0.99, lam=0.5, n_agents=n, action_size=5, obs_size=obs_size,
+                     state_size=state_size, h_size=128, lr_critic=0.0005, lr_actor=0.0002)
 
     experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name="COMA", \
                                 auto_param_logging=False, auto_metric_logging=False,
                                 log_graph=False, log_env_details=False, parse_args=False,
                                 auto_output_logging=False)
-    experiment.log_multiple_params(coma.params)
+    #experiment.log_multiple_params(coma.params)
     #
 
     # visualize(coma)
     try:
-        for e in range(400):
+        for e in range(800):
             if e % 20 == 0:
                 print('e', e)
                 coma.update_target()
@@ -132,16 +133,18 @@ if __name__ == "__main__":
 
             gather_rollouts(coma, eps=max(0.5 - e*0.00005, 0.05))
 
-            coma.fit_critic(lam=0.5)
+            coma.fit_critic()
             coma.fit_actor(eps=max(0.5 - e*0.00005, 0.05))
 
-            print("reward: {0:5.2f}, actor loss: {1:5.2f}, critic loss: {2:5.2f}".format(
-                coma.metrics['mean_reward'],
-                coma.metrics['mean_actor_loss'],
-                coma.metrics['mean_critic_loss']))
+            # print("reward: {0:5.2f}, actor loss: {1:5.2f}, critic loss: {2:5.2f}".format(
+            #     coma.metrics['mean_reward'],
+            #     coma.metrics['mean_actor_loss'],
+            #     coma.metrics['mean_critic_loss']))
 
             experiment.set_step(e)
             experiment.log_multiple_metrics(coma.metrics)
+            experiment.log_multiple_params(coma.params)
+
     except KeyboardInterrupt:
         pass
     # finally:

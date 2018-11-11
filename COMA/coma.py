@@ -19,11 +19,13 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
 
 class COMA():
 
-    def __init__(self, env, batch_size, seq_len, discount, n_agents, action_size, obs_size, state_size, h_size):
+    def __init__(self, env, batch_size, seq_len, discount, lam, n_agents, action_size,
+                 obs_size, state_size, h_size, lr_critic=0.0005, lr_actor=0.0002):
         """
         :param batch_size:
         :param seq_len: horizon
         :param discount: discounting factor
+        :param lam: for TD(lambda) return
         :param n_agents:
         :param action_size: size of the discrete action space, actions are as one-hot vectors
         :param obs_size:
@@ -34,12 +36,27 @@ class COMA():
         self.batch_size = batch_size
         self.seq_len = seq_len
         self.discount = discount
+        self.lam = lam
         self.n_agents = n_agents
         self.action_size = action_size
         self.obs_size = obs_size
         self.state_size = state_size
         self.h_size = h_size
         self.env = env
+        self.lr_critic = lr_critic
+        self.lr_actor = lr_actor
+        self.metrics = {}
+
+        self.params = {
+            "batch_size": batch_size,
+            "seq_len": seq_len,
+            "discount": discount,
+            "n_agents": n_agents,
+            "h_size": h_size,
+            "lambda": lam,
+            "lr_critic": lr_critic,
+            "lr_actor": lr_actor,
+                }
 
         # Create "placeholders" for incoming training data (Sorry, tensorflow habit)
         # will be set with process_data
@@ -102,7 +119,7 @@ class COMA():
         advantage = [q_vals.clone().detach() for a in range(self.n_agents)]
 
         # Optimizer
-        optimizer = torch.optim.Adam(self.actor.parameters(), lr=0.0005, eps=1e-08)
+        optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.lr_actor, eps=1e-08)
         optimizer.zero_grad()
 
         sum_loss = 0.0
@@ -148,23 +165,26 @@ class COMA():
             print('advantage', torch.mean(advantage[a]))
 
             sum_loss += torch.mean(loss).item()
+
             # compute the gradients of the policy network using the advantage
             # do not use optimizer.zero_grad() since we want to accumulate the gradients for all agents
             loss.backward(torch.ones(self.batch_size, self.seq_len))
 
-            # after computing the gradient for all agents, perform a weight update on the policy network
-            optimizer.step()
-            optimizer.zero_grad()
+        # after computing the gradient for all agents, perform a weight update on the policy network
+        optimizer.step()
+        optimizer.zero_grad()
+        self.metrics["mean_actor_loss"] = sum_loss / self.n_agents
 
-        return sum_loss
+        return sum_loss / self.n_agents
 
 
-    def fit_critic(self, lam):
+    def fit_critic(self):
         """
         Updates the critic using the off-line lambda return algorithm
         :param lam: lambda parameter used to average n-step targets
         :return:
         """
+        lam = self.lam
 
         # first compute the future discounted return at every step using the sequence of rewards
 
@@ -200,7 +220,7 @@ class COMA():
         targets = torch.zeros((self.batch_size, self.seq_len), dtype=torch.float32)
 
         # Optimizer
-        optimizer = torch.optim.Adam(self.critic.parameters(), lr=0.0005, eps=1e-08)
+        optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.lr_critic, eps=1e-08)
 
         sum_loss = 0.
 
@@ -218,20 +238,16 @@ class COMA():
             pred = self.critic.forward(self.joint_action_state_pl[:, t]).squeeze()
             print('pred', pred[0])
 
-
             loss = torch.mean(torch.pow(targets[:, t] - pred, 2)) / self.seq_len
-            sum_loss += loss.data[0]
-
-            loss = torch.mean(torch.pow(targets[:, t] - pred, 2))
             sum_loss += loss.item()
-
-            # print('loss', loss)
-
+            # print("critic loss", sum_loss)
             # fit the Critic
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-        return  sum_loss / self.seq_len
+
+        self.metrics["mean_critic_loss"] = sum_loss / self.seq_len
+        return sum_loss / self.seq_len
 
 def unit_test():
     n_agents = 3
