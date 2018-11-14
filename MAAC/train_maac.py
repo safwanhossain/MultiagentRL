@@ -91,26 +91,26 @@ class MAAC():
         critic_values = self.critic(curr_agent_obs_batch.cuda(), action_batch.cuda())
         
         # Sample a batch of actions given the next observation (for the target network)
-        agent_probs = torch.zeros(self.n_agents, batch_size, 1)
-        next_joint_actions = torch.zeros(self.n_agents, batch_size, self.action_size)
+        agent_probs = torch.zeros(self.n_agents, batch_size, 1).cuda()
+        next_joint_actions = torch.zeros(self.n_agents, batch_size, self.action_size).cuda()
         for n in range(self.n_agents):
             probs = self.target_agents[n].action(next_agent_obs_batch[n].cuda())
-            action_idx = (torch.multinomial(probs.cpu(), num_samples=1)).numpy().flatten()
-            # TODO Can't think of numpy/torch way of doing this !!
-            for i in range(batch_size):
-                next_joint_actions[n][i][action_idx[i]] = 1
-                agent_probs[n][i] = probs[i][action_idx[i]] 
+            action_ids = torch.multinomial(probs, 1)
+            next_joint_actions[n] = torch.FloatTensor(*probs.shape).cuda().fill_(0).scatter_(\
+                    1, action_ids, 1)
+            agent_probs[n] = probs.gather(1, action_ids)
+
         # get the target critic values for all agents
         target_values = self.target_critic(next_agent_obs_batch.cuda(), next_joint_actions.cuda())
 
         # compute the critic loss
         critic_loss = 0
-        mse_loss = torch.nn.MSELoss()
+        mse_loss = torch.nn.MSELoss().cuda()
         for n in range(self.n_agents):
-            y_i = reward_batch + self.gamma*(target_values[n] - self.alpha*torch.log(agent_probs[n]))
-            critic_loss += mse_loss(critic_values[n], y_i.detach())
+            y_i = reward_batch.cuda() + self.gamma*(target_values[n].cuda() - self.alpha*torch.log(agent_probs[n].cuda()))
+            critic_loss += mse_loss(critic_values[n].cuda(), y_i.detach())
         
-        #backpropagate the loss
+        # backpropagate the loss
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
@@ -126,15 +126,14 @@ class MAAC():
                 action_batch, reward_batch = self.buffer.sample_from_buffer(batch_size)
 
         # Use the current observations to sample a set of actions (for the target network)
-        agent_probs = torch.zeros(self.n_agents, batch_size, 1)
-        next_joint_actions = torch.zeros(self.n_agents, batch_size, self.action_size)
+        agent_probs = torch.zeros(self.n_agents, batch_size, 1).cuda()
+        next_joint_actions = torch.zeros(self.n_agents, batch_size, self.action_size).cuda()
         for n in range(self.n_agents):
             probs = self.agents[n].action(curr_agent_obs_batch[n].cuda())
-            action_idx = (torch.multinomial(probs.cpu(), num_samples=1)).numpy().flatten()
-            # TODO Can't think of numpy/torch way of doing this !!
-            for i in range(batch_size):
-                next_joint_actions[n][i][action_idx[i]] = 1
-                agent_probs[n][i] = probs[i][action_idx[i]] 
+            action_ids = torch.multinomial(probs, 1)
+            next_joint_actions[n] = torch.FloatTensor(*probs.shape).cuda().fill_(0).scatter_(\
+                    1, action_ids, 1)
+            agent_probs[n] = probs.gather(1, action_ids)
         
         # Get the Q values for each agent at the current observation
         all_action_q, curr_action_q = self.critic(curr_agent_obs_batch.cuda(), action_batch.cuda(), \
@@ -142,15 +141,12 @@ class MAAC():
 
         # compute the loss using baseline and entropy term
         for n in range(self.n_agents):
-            log_pi = torch.log(agent_probs[n])
-            baseline = (all_action_q[n]*agent_probs[n]).sum(dim=1, keepdim=True)
-            target = curr_action_q[n] - baseline
+            log_pi = torch.log(agent_probs[n]).cuda()
+            baseline = (all_action_q[n].cuda()*agent_probs[n].cuda()).sum(dim=1, keepdim=True)
+            target = curr_action_q[n].cuda() - baseline
             target = (target - target.mean()) / target.std()    # make it 0 mean and 1 var (idk why??)
             loss = (log_pi*(self.alpha*log_pi - target)).mean()
 
-            # TODO: there is supposed to be some regularization here according to the github code
-            # but not the paper. Not implemented
-            
             self.agent_optimizers[n].zero_grad()
             loss.backward(retain_graph=True)
             self.agent_optimizers[n].step()
@@ -210,8 +206,8 @@ class MAAC():
 
                 # Step 3: compute the next action
                 joint_actions = torch.zeros(len(self.parallel_envs), self.n_agents, self.action_size)
-                for agent in self.agents:
-                    obs = obs_for_actor[n]
+                for i, agent in enumerate(self.agents):
+                    obs = obs_for_actor[i]
                     dist = agent.action(obs.cuda())    # the environments can be treated as a batch
                     
                     # sample action from pi, convert to one-hot vector
@@ -227,7 +223,7 @@ class MAAC():
                     num_steps = 0
 
             # print the reward at end of each episode
-            print('Waza reward', torch.mean(reward_arr))
+            print('Reward', torch.mean(reward_arr))
 
 def main():
     parallel_envs = make_parallel_environments("simple_spread", 12)
