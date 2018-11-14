@@ -9,15 +9,16 @@ class Actor_Policy():
     ''' This is the class that the particle environment is used to. Requires the implementation
     of the action function which, given an observation, return an action'''
     def __init__(self, input_size, action_size):
-        self.actor_network = Actor(input_size, action_size)
+        self.actor_network = Actor_Network_Linear(input_size, action_size)
 
     def get_network(self):
         return self.actor_network
 
     def action(self, obs):
-        actions = self.actor_network(obs, eps=0.1)
+        actions = self.actor_network(obs)
+        return actions
 
-    def get_params():
+    def get_params(self):
         return self.actor_network.parameters()
 
 class Actor_Network_Linear(torch.nn.Module):
@@ -55,7 +56,7 @@ class Actor_Network_Linear(torch.nn.Module):
 
         # Get a discrete probability  distribution over the action space
         ret = self.model(self.batch_norm(observation))
-        softmax_ret = torch.functional.softmax(ret)
+        softmax_ret = nn.functional.softmax(ret)
 
         if get_regularized:
             return softmax_ret, (softmax_ret**2).mean(dim=1)
@@ -66,7 +67,7 @@ def unit_test():
     test_actor = Actor_Network_Linear(obs_size=14, action_size=5)
     # Give here a batch of 10, each has a sequence of 6 actions
     obs_seq = torch.randn((10, 14))
-    output = test_actor.forward(obs_seq, eps=0.01)
+    output = test_actor.forward(obs_seq)
     if output.shape == (10, 5):
         print("PASSED")
 

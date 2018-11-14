@@ -93,11 +93,11 @@ class Global_Critic(nn.Module):
             to_concat = []
             for l in range(self.attention_heads):             # for each of the multiple attention heads
                 query = self.Wq_layers[l](ei_s[i])
-                total = torch.zeros(batch_size, self.attend_dim) 
+                total = torch.zeros(batch_size, self.attend_dim).cuda() 
                 for j in range(len(observation_vector)):
                     if i != j:
                         key = self.Wk_layers[l](ei_s[j])
-                        alpha_j = torch.zeros(batch_size, 1)
+                        alpha_j = torch.zeros(batch_size, 1).cuda()
                         for b in range(batch_size):
                             scaled_att_weights = (key[b,:].dot(query[b,:])) / np.sqrt(key.shape[1])
                             alpha_j[b,:] = torch.nn.functional.softmax(scaled_att_weights, dim=0)
