@@ -3,6 +3,7 @@ Train agents for particle environment using COMA
 """
 from comet_ml import Experiment
 from coma import COMA
+from actor import *
 import marl_env
 import torch
 import time
@@ -29,8 +30,8 @@ def gather_rollouts(coma, eps):
             # get observations, by executing current joint action
             obs_n, reward_n, done_n, info_n = coma.env.step(joint_action)
 
-            # they all get the same reward, save the reward
-            coma.reward_seq_pl[i, t] = reward_n[0]
+            # they all get the same reward, save the reward, divided by number of agents, to prevent large rewards and to compare with single agent experiments
+            coma.reward_seq_pl[i, t] = reward_n[0] / coma.n_agents
 
             # save the joint action for training
             coma.joint_action_pl[i, t, :] = joint_action.flatten()
@@ -80,7 +81,7 @@ def visualize(coma):
 
     for t in range(coma.seq_len):
         coma.env.render()
-        time.sleep(0.25)
+        time.sleep(0.05)
         # get observations
         obs_n, reward_n, done_n, info_n = env.step(joint_action)
 
@@ -107,29 +108,34 @@ def visualize(coma):
 
 if __name__ == "__main__":
 
-    n = 1
+    n = 2
     obs_size = 4 + 2*(n-1) + 2*n
     state_size = 4*n + 2*n
 
     env = marl_env.make_env('simple_spread', n_agents=n)
 
-    coma = COMA(env=env, batch_size=50, seq_len=200, discount=0.99, lam=0.5, n_agents=n, action_size=5, obs_size=obs_size,
+    policy_arch = {'type': GRUActor, 'h_size': 128}
+    critic_arch = {'h_size': 64, 'n_layers':1}
+
+    coma = COMA(env=env, critic_arch=critic_arch, policy_arch=policy_arch,
+                batch_size=50, seq_len=50, discount=0.8, lam=0.8, n_agents=n, action_size=5, obs_size=obs_size,
                      state_size=state_size, h_size=128, lr_critic=0.0005, lr_actor=0.0002)
 
     experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name="COMA", \
                                 auto_param_logging=False, auto_metric_logging=False,
                                 log_graph=False, log_env_details=False, parse_args=False,
                                 auto_output_logging=False)
-    #experiment.log_multiple_params(coma.params)
-    #
+
+    experiment.log_multiple_params(coma.params)
+    experiment.log_multiple_params(coma.policy_arch)
+    experiment.log_multiple_params(coma.critic_arch)
 
     # visualize(coma)
     try:
-        for e in range(800):
-            if e % 20 == 0:
+        for e in range(4000):
+            if e % 2 == 0:
                 print('e', e)
                 coma.update_target()
-
 
             gather_rollouts(coma, eps=max(0.5 - e*0.00005, 0.05))
 
@@ -143,10 +149,12 @@ if __name__ == "__main__":
 
             experiment.set_step(e)
             experiment.log_multiple_metrics(coma.metrics)
-            experiment.log_multiple_params(coma.params)
 
     except KeyboardInterrupt:
+        visualize(coma)
         pass
+
+    visualize(coma)
     # finally:
     #     plt.plot(coma.metrics['mean_reward'], 'b')
     #     plt.plot(coma.metrics['mean_actor_loss'], 'g')

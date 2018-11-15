@@ -19,7 +19,7 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
 
 class COMA():
 
-    def __init__(self, env, batch_size, seq_len, discount, lam, n_agents, action_size,
+    def __init__(self, env, critic_arch, policy_arch, batch_size, seq_len, discount, lam, n_agents, action_size,
                  obs_size, state_size, h_size, lr_critic=0.0005, lr_actor=0.0002):
         """
         :param batch_size:
@@ -58,6 +58,9 @@ class COMA():
             "lr_actor": lr_actor,
                 }
 
+        self.critic_arch = critic_arch
+        self.policy_arch = policy_arch
+
         # Create "placeholders" for incoming training data (Sorry, tensorflow habit)
         # will be set with process_data
 
@@ -82,15 +85,21 @@ class COMA():
         # sequence of immediate rewards
         self.reward_seq_pl = np.zeros((batch_size, seq_len))
 
-        # set up the modules for actor-critic
+        # set up the modules for actor-critic based on specified arch
+        # specify GRU or MLP policy
+        ActorType = policy_arch['type']
         # actor takes in agent index as well
-        self.actor = GRUActor(input_size=obs_size + action_size + n_agents,
-                           h_size=h_size,
+        self.actor = ActorType(input_size=obs_size + action_size + n_agents,
+                           h_size=policy_arch['h_size'],
                            action_size = action_size)
 
-        self.critic = GlobalCritic(input_size=action_size*(n_agents) + state_size, hidden_size=128)
+        self.critic = GlobalCritic(input_size=action_size*(n_agents) + state_size,
+                                   hidden_size=critic_arch['h_size'],
+                                   n_layers=critic_arch['n_layers'])
 
-        self.target_critic = GlobalCritic(input_size=action_size*(n_agents) + state_size, hidden_size=128)
+        self.target_critic = GlobalCritic(input_size=action_size*(n_agents) + state_size,
+                                          hidden_size=critic_arch['h_size'],
+                                          n_layers=critic_arch['n_layers'])
 
     def update_target(self):
         """
@@ -181,7 +190,6 @@ class COMA():
     def fit_critic(self):
         """
         Updates the critic using the off-line lambda return algorithm
-        :param lam: lambda parameter used to average n-step targets
         :return:
         """
         lam = self.lam
