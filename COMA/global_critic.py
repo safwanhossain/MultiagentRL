@@ -8,7 +8,6 @@ import torch.nn as nn
 Q function for state, joint-action pair.
 
 Inconsistencies are possible with the 'efficient' version of the critic, 
-Use as target network (briefly mentioned in the appendix of the paper)
 """
 
 class GlobalCritic(torch.nn.Module):
@@ -17,27 +16,34 @@ class GlobalCritic(torch.nn.Module):
     input is joint state, joint action
     outputs the Q-value for that state-action pair
     """
-    def __init__(self, input_size, hidden_size):
+    def __init__(self, input_size, hidden_size, n_layers):
+        """
+
+        :param input_size:
+        :param hidden_size:
+        :param n_layers: number of hidden layers
+        """
 
         super(GlobalCritic, self).__init__()
         self.input_size = input_size
+        self.layers = [nn.Linear(self.input_size, hidden_size), nn.ReLU()]
 
-        self.linear1 = nn.Linear( self.input_size, hidden_size)
-        self.linear2 = nn.Linear(hidden_size, hidden_size)
+        for n in range(n_layers):
+            self.layers.append(nn.Linear(hidden_size, hidden_size))
+            self.layers.append(nn.ReLU())
 
-        self.linear3 = nn.Linear(hidden_size, 1)
+        self.layers.append(nn.Linear(hidden_size, 1))
+        self.sequential = nn.Sequential(*self.layers)
 
     def forward(self, state_action):
         """
         :param state_action: joint action, global state
         :return: Q-value for the joint state
         """
-        h = torch.relu(self.linear1(state_action))
-        h = torch.relu(self.linear2(h))
-        return self.linear3(h)
+        return self.sequential(state_action)
 
 def unit_test():
-    test_critic = GlobalCritic(10, 256)
+    test_critic = GlobalCritic(10, 256, 1)
     batch_size = 6
     state_action = torch.randn((batch_size, 10))
     output = test_critic.forward(state_action)

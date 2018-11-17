@@ -25,6 +25,7 @@ def gather_rollouts(coma, eps):
         joint_action[:, 0] = 1
         coma.env.reset()
 
+        actor_reset = True
         for t in range(coma.seq_len):
 
             # get observations, by executing current joint action
@@ -53,7 +54,7 @@ def gather_rollouts(coma, eps):
                 # save the actor input for training
                 coma.actor_input_pl[n][i, t, :] = actor_input
 
-                pi = coma.actor.forward(actor_input, eps)
+                pi = coma.actor.forward(actor_input, eps, reset=actor_reset)
 
                 # sample action from pi, convert to one-hot vector
                 action_idx = (torch.multinomial(pi[0, 0, :], num_samples=1)).numpy()
@@ -64,6 +65,8 @@ def gather_rollouts(coma, eps):
             # get the absolute landmark positions for the global state
             coma.global_state_pl[i, t, coma.n_agents * 4:] = torch.from_numpy(np.array(
                 [landmark.state.p_pos for landmark in coma.env.world.landmarks]).flatten())
+
+            actor_reset = False
 
     # concatenate the joint action, global state, set network inputs to torch tensors
     coma.joint_action_state_pl = torch.cat((coma.joint_action_pl, coma.global_state_pl), dim=-1)
@@ -79,6 +82,7 @@ def visualize(coma):
     joint_action[:, 0] = 1
     coma.env.reset()
 
+    actor_reset = True
     for t in range(coma.seq_len):
         coma.env.render()
         time.sleep(0.05)
@@ -98,13 +102,15 @@ def visualize(coma):
             obs_action = np.concatenate((obs_n[n][0:coma.obs_size], joint_action[n, :], agent_idx))
             actor_input = torch.from_numpy(obs_action).view(1, 1, -1).type(torch.FloatTensor)
 
-            pi = coma.actor.forward(actor_input, eps=0)
+            pi = coma.actor.forward(actor_input, eps=0, reset=actor_reset)
 
             # sample action from pi, convert to one-hot vector
             action_idx = (torch.multinomial(pi[0, 0, :], num_samples=1)).numpy()
             action = np.zeros(coma.action_size)
             action[action_idx] = 1
             joint_action[n, :] = action
+
+        actor_reset = False
 
 if __name__ == "__main__":
 
@@ -118,7 +124,7 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 64, 'n_layers':1}
 
     coma = COMA(env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                batch_size=50, seq_len=50, discount=0.8, lam=0.8, n_agents=n, action_size=5, obs_size=obs_size,
+                batch_size=30, seq_len=60, discount=0.9, lam=0.8, n_agents=n, action_size=5, obs_size=obs_size,
                      state_size=state_size, h_size=128, lr_critic=0.0005, lr_actor=0.0002)
 
     experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name="COMA", \

@@ -29,7 +29,9 @@ class GRUActor(torch.nn.Module):
 
         self.linear = torch.nn.Linear(h_size, self.action_size)
 
-    def forward(self, obs_seq, eps):
+        self.h = None
+
+    def forward(self, obs_seq, eps, reset=True):
         """
         outputs prob dist over possible actions, using an eps-bounded softmax for exploration
         input sequence shape is batch-first
@@ -40,10 +42,12 @@ class GRUActor(torch.nn.Module):
         """
         batch_size = obs_seq.size()[0]
         # initial state, shape (num_layers * num_directions, batch, hidden_size)
-        h0 = torch.zeros(1, batch_size, self.h_size)
+
+        if self.h is None or reset:
+            self.h = torch.zeros(1, batch_size, self.h_size)
 
         # output has shape [batch, seq_len, h_size]
-        output, hn = self.actor_gru(obs_seq, h0)
+        output, self.h = self.actor_gru(obs_seq, self.h)
         logits = self.linear(output)
 
         # compute eps-bounded softmax
@@ -82,9 +86,9 @@ class MLPActor(torch.nn.Module):
         return (1 - eps) * softmax + eps / self.action_size
 
 def unit_test():
-    test_actor = MLPActor(input_size=14, h_size=128, action_size=5)
+    test_actor = GRUActor(input_size=14, h_size=128, action_size=5)
     obs_seq = torch.randn((10, 6, 14))
-    output = test_actor.forward(obs_seq, eps=0.01)
+    output = test_actor.forward(obs_seq, eps=0.01, reset=True)
     if output.shape == (10, 6, 5):
         print("PASSED")
 
