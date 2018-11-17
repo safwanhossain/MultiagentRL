@@ -121,11 +121,11 @@ if __name__ == "__main__":
     env = marl_env.make_env('simple_spread', n_agents=n)
 
     policy_arch = {'type': GRUActor, 'h_size': 128}
-    critic_arch = {'h_size': 64, 'n_layers':1}
+    critic_arch = {'h_size': 128, 'n_layers':1}
 
     coma = COMA(env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                batch_size=30, seq_len=60, discount=0.9, lam=0.8, n_agents=n, action_size=5, obs_size=obs_size,
-                     state_size=state_size, h_size=128, lr_critic=0.0005, lr_actor=0.0002)
+                batch_size=30, seq_len=200, discount=0.99, lam=0.8, n_agents=n, action_size=5, obs_size=obs_size,
+                     state_size=state_size, h_size=128, lr_critic=0.0005, lr_actor=0.0001)
 
     experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name="COMA", \
                                 auto_param_logging=False, auto_metric_logging=False,
