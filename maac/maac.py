@@ -1,31 +1,19 @@
 #!/usr/bin/python3
 
 import torch
-import numpy as np
-import torch.nn as nn
-from critic import Global_Critic
-from actor import Actor_Policy
-from episode_buffer import Buffer
-import marl_env
-from datetime import datetime
 
-""" Run the MAAC training regime. Here we have E parallel environments, and a global critic for
+from actor import Actor
+from critic import Critic
+from utils.buffer import Buffer
+from environment.particle_env import make_env
+from utils.gather_batch import gather_batch
+
+""" Run the maac training regime. There is a global critic for
 each agent with an attention mechanism. For both the critic and actor loss, they use an entropy
 term to encourage exploration. They also use a baseline to reduce variance."""
 
-# In MAAC, we need to run a number of parallel environments. Set them up here
-def make_parallel_environments(env_name, num_environments):
-    # create multiple environments each with a different seed
-    parallel_envs = []
-    for i in range(num_environments):
-        env = marl_env.make_env('simple_spread')
-        env.seed(i*1000)
-        parallel_envs.append(env)
-    return parallel_envs
-
-
 class MAAC():
-    def __init__(self, parallel_envs, n_agents, action_size, agent_obs_size):
+    def __init__(self, env, n_agents):
         """
         :param batch_size:
         :param seq_len: horizon
@@ -37,55 +25,68 @@ class MAAC():
         """
         
         super(MAAC, self).__init__()
-        self.parallel_envs = parallel_envs
-        self.batch_size = 1020
+        self.env = env
+        self.batch_size = 1024
         self.seq_len = 100
         self.gamma = 0.95 
         self.n_agents = n_agents
-        self.action_size = action_size
-        self.obs_size = agent_obs_size
+        self.action_size = env.action_size
+        self.obs_size = env.agent_obs_size
         self.gpu_mode = True
         self.sequence_length = 25
-        self.episodes = 10000
+        self.epochs = 10000
         self.lr = 0.01
+        self.eps = 0.01
         self.tau = 0.002
         self.alpha = 0.2
         self.attend_tau = 0.04
         self.steps_per_update = 100
         self.num_updates = 4
         # The buffer to hold all the information of an episode
-        self.buffer = Buffer(self.n_agents, self.obs_size, self.action_size, len(self.parallel_envs)) 
+        self.buffer = Buffer(1000000, 100, self.batch_size, self.n_agents,
+                             env.agent_obs_size, env.global_state_size, env.action_size)
         
-        # MAAC does NOT do parameter sharing - each agent has it's own network and optimizer
-        self.agents = [Actor_Policy(input_size=self.obs_size, action_size=self.action_size) for i in range(self.n_agents)]
-        self.target_agents = [Actor_Policy(input_size=self.obs_size, action_size=self.action_size) for i in range(self.n_agents)]
+        # maac does NOT do parameter sharing - each agent has it's own network and optimizer
+        self.agents = [Actor(self.obs_size, self.action_size) for i in range(self.n_agents)]
+        self.target_agents = [Actor(self.obs_size, self.action_size) for i in range(self.n_agents)]
         self.agent_optimizers = [torch.optim.Adam(agent.get_params(), lr=self.lr) for agent in self.agents]
         
         # We usually have two versions of the critic, as TD lambda is trained thru bootstraping. self.critic
         # is the "True" critic and target critic is the one used for training
-        self.critic = Global_Critic(observation_size=self.obs_size, \
+        self.critic = Critic(observation_size=self.obs_size, \
                 action_size=self.action_size, num_agents=self.n_agents, attention_heads=4)
-        self.target_critic = Global_Critic(observation_size=self.obs_size, \
+        self.target_critic = Critic(observation_size=self.obs_size, \
                 action_size=self.action_size, num_agents=self.n_agents, attention_heads=4)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.lr, weight_decay=1e-3) 
         
         # get the critic values for all agents
         if self.gpu_mode:
             for agent in self.agents:
-                agent.get_network().cuda()
+                agent.cuda()
             for agent in self.target_agents:
-                agent.get_network().cuda()
+                agent.cuda()
             self.critic.cuda()
             self.target_critic.cuda()
 
-    def update_critic(self, batch_size):
+    def format_buffer_data(self, curr_agent_obs, next_agent_obs, curr_state, next_state, actions, rewards):
+        """
+        Reshape buffer data to correct dimensions
+        """
+        curr_agent_obs = curr_agent_obs.view(self.n_agents, self.batch_size, self.obs_size)
+        next_agent_obs = next_agent_obs.view(self.n_agents, self.batch_size, self.obs_size)
+        actions = actions.view(self.n_agents, self.batch_size, self.action_size)
+        rewards = rewards.view(self.batch_size, 1)
+        return curr_agent_obs, next_agent_obs, actions, rewards
+
+    def update_critic(self):
         """ train the critic usinng batches of observatios and actions. Training is based on the 
         TD lambda method with a target critic"""
         assert(not self.buffer.is_empty())
+        batch_size = self.batch_size
 
         # collect the batch
-        curr_agent_obs_batch, next_agent_obs_batch, \
-                action_batch, reward_batch = self.buffer.sample_from_buffer(batch_size)
+        curr_agent_obs_batch, next_agent_obs_batch, action_batch, reward_batch = \
+            self.format_buffer_data(*self.buffer.sample_from_buffer(ordered=False, full_episode=False))
         
         # get the critic values for all agents
         critic_values = self.critic(curr_agent_obs_batch.cuda(), action_batch.cuda())
@@ -94,7 +95,7 @@ class MAAC():
         agent_probs = torch.zeros(self.n_agents, batch_size, 1).cuda()
         next_joint_actions = torch.zeros(self.n_agents, batch_size, self.action_size).cuda()
         for n in range(self.n_agents):
-            probs = self.target_agents[n].action(next_agent_obs_batch[n].cuda())
+            probs = self.target_agents[n](next_agent_obs_batch[n].cuda(), self.eps)
             action_ids = torch.multinomial(probs, 1)
             next_joint_actions[n] = torch.FloatTensor(*probs.shape).cuda().fill_(0).scatter_(\
                     1, action_ids, 1)
@@ -116,20 +117,21 @@ class MAAC():
         self.critic_optimizer.step()
 
     
-    def update_agent(self, batch_size):
+    def update_agent(self):
         """ Train the actor using the Q function to approximate long term reward, use a baseline to
         reduce variance, and use an entropy term to encourage exploration"""
         assert(not self.buffer.is_empty())
-        
+        batch_size = self.batch_size
+
         # collect the batch
-        curr_agent_obs_batch, next_agent_obs_batch, \
-                action_batch, reward_batch = self.buffer.sample_from_buffer(batch_size)
+        curr_agent_obs_batch, next_agent_obs_batch, action_batch, reward_batch = \
+            self.format_buffer_data(*self.buffer.sample_from_buffer(ordered=False, full_episode=False))
 
         # Use the current observations to sample a set of actions (for the target network)
         agent_probs = torch.zeros(self.n_agents, batch_size, 1).cuda()
         next_joint_actions = torch.zeros(self.n_agents, batch_size, self.action_size).cuda()
         for n in range(self.n_agents):
-            probs = self.agents[n].action(curr_agent_obs_batch[n].cuda())
+            probs = self.agents[n](curr_agent_obs_batch[n].cuda(), eps=self.eps)
             action_ids = torch.multinomial(probs, 1)
             next_joint_actions[n] = torch.FloatTensor(*probs.shape).cuda().fill_(0).scatter_(\
                     1, action_ids, 1)
@@ -151,7 +153,6 @@ class MAAC():
             loss.backward(retain_graph=True)
             self.agent_optimizers[n].step()
 
-    
     def update_target_networks(self):
         """ The target networks should basically mimic the trained networks with some 1-tau probability"""
         # First update the non-attention modules for critic
@@ -169,66 +170,24 @@ class MAAC():
             for target_param, param in zip(self.target_agents[n].get_params(), self.agents[n].get_params()):
                 target_param.data.copy_(target_param.data * self.tau + param.data * (1 - self.attend_tau))
 
+    def policy(self, obs, prev_action, n):
+        return self.agents[n](obs.view(-1, self.obs_size), eps=self.eps)[0]
 
     def train(self):
-        num_steps = 0
-        for ep in range(0, self.episodes):
-            # Step 1: initialize actions to NOOP and reset environments
-            joint_actions = torch.zeros(len(self.parallel_envs), self.n_agents, self.action_size)
-            reward_arr = torch.zeros(len(self.parallel_envs), self.seq_len)
-            curr_obs_n = []
-            # for some reason, they do not clear the buffer - I find this very strange
+        for e in range(self.epochs):
+            gather_batch(self.env, self)
 
-            for l in range(len(self.parallel_envs)):
-                joint_actions[l, :, 0] = 1
-            for env in self.parallel_envs:
-                curr_obs_n.append(env.reset())
-
-            for i in range(self.seq_len):
-                # Need to store actor observations to get the next action
-                obs_for_actor = torch.zeros(self.n_agents, len(self.parallel_envs), self.obs_size)
-                
-                for e, env in enumerate(self.parallel_envs):
-                    # get observations, by executing current joint action and store in buffer
-                    next_obs_n, reward_n, done_n, info_n = env.step(joint_actions[e])
-                    reward = reward_n[0]
-                    reward_arr[e,i] = reward
-                    self.buffer.add_to_buffer(curr_obs_n[e], next_obs_n, joint_actions[e], reward, e)
-                    
-                    # store the observations needed for actor forward pass
-                    for n in range(self.n_agents):
-                        obs_for_actor[n,e,:] = torch.from_numpy(next_obs_n[n][0:self.obs_size])  
-
-                    # next observation becomes the current ones
-                    curr_obs_n[e] = next_obs_n
-                
-                num_steps += len(self.parallel_envs)
-
-                # Step 3: compute the next action
-                joint_actions = torch.zeros(len(self.parallel_envs), self.n_agents, self.action_size)
-                for i, agent in enumerate(self.agents):
-                    obs = obs_for_actor[i]
-                    dist = agent.action(obs.cuda())    # the environments can be treated as a batch
-                    
-                    # sample action from pi, convert to one-hot vector
-                    action_idx = (torch.multinomial(dist.cpu(), num_samples=1)).numpy().flatten()
-                    for l in range(len(self.parallel_envs)):
-                        joint_actions[l][n][action_idx[l]] = 1
-
-                if self.buffer.length() > self.batch_size and num_steps >= self.steps_per_update:
-                    for i in range(self.num_updates):
-                        self.update_critic(self.batch_size)
-                        self.update_agent(self.batch_size)
-                    self.update_target_networks()
-                    num_steps = 0
-
-            # print the reward at end of each episode
-            print('Reward', torch.mean(reward_arr))
+            if self.buffer.length() > self.batch_size:
+                for i in range(self.num_updates):
+                    self.update_critic()
+                    self.update_agent()
+                self.update_target_networks()
 
 def main():
-    parallel_envs = make_parallel_environments("simple_spread", 12)
-    big_MAAC = MAAC(parallel_envs, n_agents=3, action_size=5, agent_obs_size=14)    
-    big_MAAC.train()
+    number_of_agents = 2
+    env = make_env(number_of_agents)
+    model = MAAC(env, n_agents=number_of_agents)
+    model.train()
 
 if __name__ == "__main__":
     main()

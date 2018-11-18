@@ -1,11 +1,10 @@
 #!/usr/bin/python3
 
-import torch
 import numpy as np
-import torch.nn as nn
-from global_critic import GlobalCritic
-from actor import MLPActor, GRUActor
-import marl_env
+import torch
+
+from actors import GRUActor
+from environment import marl_env
 
 """ Run the COMA training regime. Training is done in batch mode with a batch size of 30. Given the 
 small nature of the current problem, we are NOT parameter sharing between agents (will do so when 

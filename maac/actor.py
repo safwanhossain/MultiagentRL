@@ -3,28 +3,13 @@ import numpy as np
 import multiagent.policy 
 import torch
 import torch.nn as nn
-import utils
+from utils.initializations import normal_init, xavier_init
 
-class Actor_Policy():
-    ''' This is the class that the particle environment is used to. Requires the implementation
-    of the action function which, given an observation, return an action'''
-    def __init__(self, input_size, action_size):
-        self.actor_network = Actor_Network_Linear(input_size, action_size)
 
-    def get_network(self):
-        return self.actor_network
-
-    def action(self, obs):
-        actions = self.actor_network(obs)
-        return actions
-
-    def get_params(self):
-        return self.actor_network.parameters()
-
-class Actor_Network_Linear(torch.nn.Module):
+class Actor(torch.nn.Module):
 
     def __init__(self, obs_size, action_size):
-        super(Actor_Network_Linear, self).__init__()
+        super(Actor, self).__init__()
         self.obs_size = obs_size
         self.action_size = action_size
         self.h_size = 256
@@ -38,13 +23,10 @@ class Actor_Network_Linear(torch.nn.Module):
             torch.nn.Linear(self.h_size, action_size),
             torch.nn.Softmax(dim=1)
         )
-        self.weight_init(mean=0.0, std=0.02)
+        # self.weight_init(mean=0.0, std=0.02)
+        self.model.apply(xavier_init)
 
-    def weight_init(self, mean, std):
-        for m in self._modules:
-            utils.normal_init(self._modules[m], mean, std)
-    
-    def forward(self, observation, get_regularized=False):
+    def forward(self, observation, eps, get_regularized=False):
         """
         outputs prob dist over possible actions, using an eps-bounded softmax for exploration
         input sequence shape is batch-first
@@ -55,16 +37,21 @@ class Actor_Network_Linear(torch.nn.Module):
         """
 
         # Get a discrete probability  distribution over the action space
-        ret = self.model(self.batch_norm(observation))
+        ret = observation if observation.shape[0] == 1 else self.batch_norm(observation)
+        ret = self.model(ret.cuda())
         softmax_ret = nn.functional.softmax(ret)
+        softmax_ret = (1 - eps) * softmax_ret + eps / self.action_size
 
         if get_regularized:
             return softmax_ret, (softmax_ret**2).mean(dim=1)
         else:
             return softmax_ret
 
+    def get_params(self):
+        return self.parameters()
+
 def unit_test():
-    test_actor = Actor_Network_Linear(obs_size=14, action_size=5)
+    test_actor = Actor(obs_size=14, action_size=5)
     # Give here a batch of 10, each has a sequence of 6 actions
     obs_seq = torch.randn((10, 14))
     output = test_actor.forward(obs_seq)

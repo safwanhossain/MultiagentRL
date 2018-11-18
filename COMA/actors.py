@@ -4,15 +4,6 @@ import multiagent.policy
 import torch
 import torch.nn as nn
 
-class Actor_Policy():
-    ''' This is the class that the particle environment is used to. Requires the implementation
-    of the action function which, given an observation, return an action'''
-    def __init__(self, input_size, h_size, action_size):
-        self.actor_network = Actor(input_size, h_size, action_size)
-
-    def action(self, obs):
-        actions = self.actor_network(obs, eps=0.1)
-        
 class GRUActor(torch.nn.Module):
     ''' This network, takes in observations, and returns an action. Action space is discrete,
     '''

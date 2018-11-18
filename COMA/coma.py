@@ -1,12 +1,16 @@
 #!/usr/bin/python3
+from comet_ml import Experiment
+
+from actors import GRUActor, MLPActor
+from environment.particle_env import make_env, visualize
+from critic import Critic
+import numpy as np
+
+from utils.buffer import Buffer
+from utils.gather_batch import gather_batch
 
 import torch
-import numpy as np
-import torch.nn as nn
-from global_critic import GlobalCritic
-from actor import MLPActor, GRUActor
-import marl_env
-
+import time
 
 """ Run the COMA training regime. Training is done in batch mode with a batch size of 30. Given the 
 small nature of the current problem, we are NOT parameter sharing between agents (will do so when 
@@ -19,8 +23,8 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
 
 class COMA():
 
-    def __init__(self, env, critic_arch, policy_arch, batch_size, seq_len, discount, lam, n_agents, action_size,
-                 obs_size, state_size, h_size, lr_critic=0.0005, lr_actor=0.0002):
+    def __init__(self, env, critic_arch, policy_arch, batch_size, seq_len, discount, lam, h_size,
+                 lr_critic=0.0005, lr_actor=0.0002, eps=0.01):
         """
         :param batch_size:
         :param seq_len: horizon
@@ -37,21 +41,23 @@ class COMA():
         self.seq_len = seq_len
         self.discount = discount
         self.lam = lam
-        self.n_agents = n_agents
-        self.action_size = action_size
-        self.obs_size = obs_size
-        self.state_size = state_size
+        self.n_agents = env.n
+        self.action_size = env.action_size
+        self.obs_size = env.agent_obs_size
+        self.state_size = env.global_state_size
         self.h_size = h_size
         self.env = env
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
+        self.eps = eps
+        self.epochs = 4000
         self.metrics = {}
 
         self.params = {
             "batch_size": batch_size,
             "seq_len": seq_len,
             "discount": discount,
-            "n_agents": n_agents,
+            "n_agents": env.n,
             "h_size": h_size,
             "lambda": lam,
             "lr_critic": lr_critic,
@@ -61,26 +67,18 @@ class COMA():
         self.critic_arch = critic_arch
         self.policy_arch = policy_arch
 
+        # The buffer to hold all the information of an episode
+        self.buffer = Buffer(self.seq_len * self.batch_size, self.seq_len, self.batch_size * self.seq_len,
+                             self.n_agents, env.agent_obs_size, env.global_state_size, env.action_size)
+
         # Create "placeholders" for incoming training data (Sorry, tensorflow habit)
         # will be set with process_data
-
-        # list of u_- for each agent, the joint action excluding the agent's action, used for Q-fitting and baseline
-        self.joint_fixed_actions_pl = None
-
-        # joint action of all agents, flattened
-        self.joint_action_pl = torch.zeros((batch_size, seq_len, action_size*n_agents))
-
-        # the global state
-        self.global_state_pl = torch.zeros((batch_size, seq_len, state_size))
 
         # joint-action state pairs
         self.joint_action_state_pl = torch.zeros((batch_size, seq_len, state_size+self.action_size*self.n_agents))
 
         # obs, prev_action pairs, one tensor for each agent
-        self.actor_input_pl = [torch.zeros((batch_size, seq_len, obs_size+action_size+n_agents)) for n in range(self.n_agents)]
-
-        # sequence of future returns for each timestep G[t] = r[t] + discount * G[t+1] used as target for Q-fitting
-        self.return_seq_pl = np.zeros((batch_size, seq_len))
+        self.actor_input_pl = [torch.zeros((batch_size, seq_len, obs_size+self.action_size+self.n_agents)) for n in range(self.n_agents)]
 
         # sequence of immediate rewards
         self.reward_seq_pl = np.zeros((batch_size, seq_len))
@@ -89,17 +87,17 @@ class COMA():
         # specify GRU or MLP policy
         ActorType = policy_arch['type']
         # actor takes in agent index as well
-        self.actor = ActorType(input_size=obs_size + action_size + n_agents,
+        self.actor = ActorType(input_size=obs_size + self.action_size + self.n_agents,
                            h_size=policy_arch['h_size'],
-                           action_size = action_size)
+                           action_size = self.action_size)
 
-        self.critic = GlobalCritic(input_size=action_size*(n_agents) + state_size,
-                                   hidden_size=critic_arch['h_size'],
-                                   n_layers=critic_arch['n_layers'])
+        self.critic = Critic(input_size=self.action_size*(self.n_agents) + state_size,
+                                   hidden_size=critic_arch['h_size'])#,
+                                   # n_layers=critic_arch['n_layers'])
 
-        self.target_critic = GlobalCritic(input_size=action_size*(n_agents) + state_size,
-                                          hidden_size=critic_arch['h_size'],
-                                          n_layers=critic_arch['n_layers'])
+        self.target_critic = Critic(input_size=self.action_size*(self.n_agents) + state_size,
+                                          hidden_size=critic_arch['h_size'])#,
+                                          # n_layers=critic_arch['n_layers'])
 
     def update_target(self):
         """
@@ -257,45 +255,76 @@ class COMA():
         self.metrics["mean_critic_loss"] = sum_loss / self.seq_len
         return sum_loss / self.seq_len
 
-def unit_test():
-    n_agents = 3
-    n_landmarks = 3
+    def format_buffer_data(self):
+        """
+        Reshape buffer data to correct dimensions
+        """
+        self.reward_seq_pl[:, :] = self.buffer.rewards[:, :].numpy()
 
-    test_coma = COMA(env=env, batch_size=1, seq_len=30, discount=0.9, n_agents=3, action_size=5, obs_size=14, state_size=18, h_size=16)
-    test_coma.gather_rollouts(eps=0.05)
-    print(test_coma.actor_input_pl[0].shape)
-    print(test_coma.reward_seq_pl.shape)
-    print(test_coma.joint_action_pl.shape)
-    print(test_coma.global_state_pl.shape)
-    print(test_coma.global_state_pl[0, 1, :])
-    print(test_coma.joint_action_state_pl[0, 1, :])
+        self.joint_action_state_pl[:, :, :self.state_size] = self.buffer.curr_global_state[:, :, :]
+        self.joint_action_state_pl[:, :, self.state_size:] = self.buffer.actions.view(self.batch_size, self.seq_len, -1)
 
-    for e in range(20):
-        test_coma.fit_actor(eps=0.05)
+        noops = torch.zeros(self.batch_size, 1, self.n_agents, env.action_size)
+        noops[:, 0, :, 0] = 1
+        prev_action = torch.cat((noops, self.buffer.actions[:, :-1, :, :]), dim=1)
 
-    # for e in range(20):
-    #     test_coma.fit_critic(lam=0.5)
+        for n in range(self.n_agents):
+            agent_idx = torch.zeros(self.batch_size, self.seq_len, self.n_agents)
+            agent_idx = agent_idx.scatter(2, torch.zeros(agent_idx.shape).fill_(n).long(), 1)
+
+            actor_input = torch.cat((self.buffer.curr_agent_obs[:, :, n, :], prev_action[:, :, n, :], agent_idx), dim=2)
+            actor_input = actor_input.view(self.batch_size, self.seq_len, -1).type(torch.FloatTensor)
+            self.actor_input_pl[n][:, :, :] = actor_input
+
+    def policy(self, obs, prev_action, n):
+        agent_idx = torch.zeros(self.n_agents).scatter(0, torch.zeros(self.n_agents).fill_(n).long() , 1)
+        actor_input = torch.cat((obs, prev_action, agent_idx)).view(1, 1, -1).type(torch.FloatTensor)
+        return coma.actor(actor_input, eps=self.eps)[0][0]
+
+    def train(self):
+        experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name="COMA", \
+                                auto_param_logging=False, auto_metric_logging=False,
+                                log_graph=False, log_env_details=False, parse_args=False,
+                                disabled=True)
+
+        experiment.log_multiple_params(coma.params)
+        experiment.log_multiple_params(coma.policy_arch)
+        experiment.log_multiple_params(coma.critic_arch)
+
+        for e in range(self.epochs):
+            gather_batch(self.env, self)
+            experiment.log_multiple_metrics(coma.metrics)
+            experiment.set_step(e)
+
+            self.format_buffer_data()
+
+            self.fit_critic()
+            self.fit_actor(eps=max(0.5 - e * 0.00005, 0.05))
+
+            self.buffer.reset()
+
+            if e % 2 == 0:
+                print('e', e)
+                self.update_target()
+
 
 if __name__ == "__main__":
 
-        env = marl_env.make_env('simple_spread')
+    n = 2
+    obs_size = 4 + 2*(n-1) + 2*n
+    state_size = 4*n + 2*n
 
-        """
-        5 possible actions (NOOP, LEFT, RIGHT, UP, DOWN)
-    
-        Observation space:
-        Agent’s own velocity 2D
-        Agent’s own position 2D
-        Landmark positions with respect to the agent 3*2D
-        The positions of other agents with respect to the agent 2*2D
-        The messages C from other agents 2*2D messages (DISCARD)
-        
-        Note: Agents have access to almost everything about the global state except for other agent's 
-        velocity. The GRU cell is still useful to model where other agents are going '''
-        """
+    env = make_env(n_agents=n)
 
-        # global state consists of agent positions and velocity (2D) + landmark positions
-        # state_size = n_agents*4 + n_landmarks*2
+    policy_arch = {'type': GRUActor, 'h_size': 128}
+    critic_arch = {'h_size': 64, 'n_layers':1}
 
-        unit_test()
+    coma = COMA(env=env, critic_arch=critic_arch, policy_arch=policy_arch,
+                batch_size=50, seq_len=50, discount=0.8, lam=0.8, h_size=128, lr_critic=0.0005, lr_actor=0.0002)
 
+
+
+
+    coma.train()
+
+    visualize(coma)

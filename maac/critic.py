@@ -3,7 +3,7 @@
 import torch
 import numpy as np
 import torch.nn as nn
-import utils
+from utils.initializations import normal_init
 
 """ The Agent-dependent Critic.Each critic (one per agent) is a global critic and can access
 all observations from each agent (along with their actions). There is an attention layer for each
@@ -11,14 +11,14 @@ critic that will pay special attention to whatever is deemed important. In forwa
 observations for all agents are passed in
 """
 
-class Global_Critic(nn.Module):
+class Critic(nn.Module):
     """
     Although we have multiple global critics, this can be efficiently computed with a single module
     There are shared layers for all critics, and layers specific to each global critic. As such,
     it will return a Q value for each agent.
     """
     def __init__(self, observation_size, action_size, num_agents, attention_heads, gpu=True):
-        super(Global_Critic, self).__init__()
+        super(Critic, self).__init__()
         self.num_agents = num_agents
         self.gpu = gpu
         self.action_size = action_size
@@ -70,7 +70,7 @@ class Global_Critic(nn.Module):
 
     def weight_init(self, mean, std):
         for m in self._modules:
-            utils.normal_init(self._modules[m], mean, std)
+            normal_init(self._modules[m], mean, std)
        
     def forward(self, observation_vector, action_vector, ret_all_actions=False):
         """
@@ -134,7 +134,7 @@ def unit_test():
     act_size = 5
     obs_size = 10
 
-    critic = Global_Critic(observation_size=10, action_size=act_size, num_agents=agents, attention_heads=4, gpu=False)
+    critic = Critic(observation_size=10, action_size=act_size, num_agents=agents, attention_heads=4, gpu=False)
     obs_vector = torch.randn((agents, batch_size, obs_size))
     action_vector = torch.randn((agents, batch_size, act_size))
 

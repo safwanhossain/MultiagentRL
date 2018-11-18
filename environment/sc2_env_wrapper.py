@@ -1,5 +1,4 @@
 from environment import Environment
-from test_agent import TestAgent
 
 import numpy as np
 
