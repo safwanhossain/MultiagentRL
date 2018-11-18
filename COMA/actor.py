@@ -59,7 +59,7 @@ class GRUActor(torch.nn.Module):
 
     def init_weights(self, m):
         if type(m) == nn.Linear:
-            torch.nn.init.xavier_uniform(m.weight)
+            torch.nn.init.normal(m.weight, mean=0, std=0.001)
             m.bias.data.fill_(0.01)
 
 class MLPActor(torch.nn.Module):
@@ -77,6 +77,8 @@ class MLPActor(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Linear(h_size, action_size))
 
+        #self.model.apply(self.init_weights)
+
     def forward(self, input, eps):
         """
         outputs prob dist over possible actions, using an eps-bounded softmax for exploration
@@ -92,6 +94,11 @@ class MLPActor(torch.nn.Module):
         # compute eps-bounded softmax
         softmax = torch.nn.functional.softmax(logits, dim=2)
         return (1 - eps) * softmax + eps / self.action_size
+
+    def init_weights(self, m):
+        if type(m) == nn.Linear:
+            torch.nn.init.normal(m.weight, mean=0, std=0.001)
+            m.bias.data.fill_(0.01)
 
 def unit_test():
     test_actor = GRUActor(input_size=14, h_size=128, action_size=5)

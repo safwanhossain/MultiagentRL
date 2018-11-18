@@ -20,7 +20,7 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
 class COMA():
 
     def __init__(self, env, critic_arch, policy_arch, batch_size, seq_len, discount, lam, n_agents, action_size,
-                 obs_size, state_size, h_size, lr_critic=0.0005, lr_actor=0.0002):
+                 obs_size, state_size, lr_critic=0.0005, lr_actor=0.0002):
         """
         :param batch_size:
         :param seq_len: horizon
@@ -41,7 +41,6 @@ class COMA():
         self.action_size = action_size
         self.obs_size = obs_size
         self.state_size = state_size
-        self.h_size = h_size
         self.env = env
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
@@ -52,7 +51,6 @@ class COMA():
             "seq_len": seq_len,
             "discount": discount,
             "n_agents": n_agents,
-            "h_size": h_size,
             "lambda": lam,
             "lr_critic": lr_critic,
             "lr_actor": lr_actor,
@@ -101,6 +99,12 @@ class COMA():
                                           hidden_size=critic_arch['h_size'],
                                           n_layers=critic_arch['n_layers'])
 
+        # actor Optimizer
+        self.actor_optimizer = torch.optim.RMSprop(self.actor.parameters(), lr=self.lr_actor, eps=1e-08)
+
+        # critic Optimizer
+        self.critic_optimizer = torch.optim.RMSprop(self.critic.parameters(), lr=self.lr_critic, eps=1e-08)
+
     def update_target(self):
         """
         Updates the target network with the critic's weights
@@ -108,7 +112,7 @@ class COMA():
         """
         self.target_critic.load_state_dict(self.critic.state_dict())
 
-    def fit_actor(self, eps):
+    def fit_actor(self):
         """
         Updates the actor using policy gradient with counterfactual baseline.
         Accumulates actor gradients from each agent and performs the update for every time-step
@@ -127,17 +131,15 @@ class COMA():
         # initialize the advantage for each agent, by copying the Q values
         advantage = [q_vals.clone().detach() for a in range(self.n_agents)]
 
-        # Optimizer
-        optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.lr_actor, eps=1e-08)
-        optimizer.zero_grad()
+        self.actor_optimizer.zero_grad()
 
         sum_loss = 0.0
 
         # computing baselines, by broadcasting across rollouts and time-steps
         for a in range(self.n_agents):
 
-            # get the dist over actions, based on each agent's observation, use the same epsilon during fitting?
-            action_dist = self.actor.forward(self.actor_input_pl[a], eps=eps)
+            # get the dist over actions, based on each agent's observation, don't use epsilon while fitting
+            action_dist = self.actor.forward(self.actor_input_pl[a], eps=0)
 
             # make a copy of the joint-action, state, to substitute different actions in it
             diff_actions.copy_(self.joint_action_state_pl)
@@ -180,8 +182,8 @@ class COMA():
             loss.backward(torch.ones(self.batch_size, self.seq_len))
 
         # after computing the gradient for all agents, perform a weight update on the policy network
-        optimizer.step()
-        optimizer.zero_grad()
+        self.actor_optimizer.step()
+        self.actor_optimizer.zero_grad()
         self.metrics["mean_actor_loss"] = sum_loss / self.n_agents
 
         return sum_loss / self.n_agents
@@ -218,7 +220,8 @@ class COMA():
 
                 # pure MC
                 if t + n > self.seq_len - 1:
-                    G[:, t, n] = total_return
+                    G[:, t, n] = self.reward_seq_pl[:, t:].dot(np.fromfunction(lambda i: self.discount**i,
+                                                                                 shape=(self.seq_len-t,)))
 
                 # combination of MC + bootstrapping
                 else:
@@ -227,12 +230,9 @@ class COMA():
         # compute target at timestep t
         targets = torch.zeros((self.batch_size, self.seq_len), dtype=torch.float32)
 
-        # Optimizer
-        optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.lr_critic, eps=1e-08)
-
         sum_loss = 0.
 
-        for t in range(self.seq_len-1, -1, -1):
+        for t in range(self.seq_len-2, -1, -1):
 
             # vector of powers of lambda
             weights = np.fromfunction(lambda i: lam ** i, shape=(self.seq_len - t,))
@@ -250,9 +250,9 @@ class COMA():
             sum_loss += loss.item()
             # print("critic loss", sum_loss)
             # fit the Critic
-            optimizer.zero_grad()
+            self.critic_optimizer.zero_grad()
             loss.backward()
-            optimizer.step()
+            self.critic_optimizer.step()
 
         self.metrics["mean_critic_loss"] = sum_loss / self.seq_len
         return sum_loss / self.seq_len

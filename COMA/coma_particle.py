@@ -54,7 +54,7 @@ def gather_rollouts(coma, eps):
                 # save the actor input for training
                 coma.actor_input_pl[n][i, t, :] = actor_input
 
-                pi = coma.actor.forward(actor_input, eps, reset=actor_reset)
+                pi = coma.actor.forward(actor_input, eps)
 
                 # sample action from pi, convert to one-hot vector
                 action_idx = (torch.multinomial(pi[0, 0, :], num_samples=1)).numpy()
@@ -102,7 +102,7 @@ def visualize(coma):
             obs_action = np.concatenate((obs_n[n][0:coma.obs_size], joint_action[n, :], agent_idx))
             actor_input = torch.from_numpy(obs_action).view(1, 1, -1).type(torch.FloatTensor)
 
-            pi = coma.actor.forward(actor_input, eps=0, reset=actor_reset)
+            pi = coma.actor.forward(actor_input, eps=0)
 
             # sample action from pi, convert to one-hot vector
             action_idx = (torch.multinomial(pi[0, 0, :], num_samples=1)).numpy()
@@ -114,19 +114,19 @@ def visualize(coma):
 
 if __name__ == "__main__":
 
-    n = 2
+    n = 1
     obs_size = 4 + 2*(n-1) + 2*n
     state_size = 4*n + 2*n
 
     env = marl_env.make_env('simple_spread', n_agents=n)
 
-    policy_arch = {'type': GRUActor, 'h_size': 128}
-    critic_arch = {'h_size': 128, 'n_layers':1}
+    policy_arch = {'type': MLPActor, 'h_size': 128}
+    critic_arch = {'h_size': 128, 'n_layers': 2}
 
     coma = COMA(env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                batch_size=30, seq_len=200, discount=0.99, lam=0.8, n_agents=n, action_size=5, obs_size=obs_size,
-                     state_size=state_size, h_size=128, lr_critic=0.0005, lr_actor=0.0001)
-
+                batch_size=30, seq_len=100, discount=0.8, lam=0.8, n_agents=n, action_size=5, obs_size=obs_size,
+                     state_size=state_size, lr_critic=0.0005, lr_actor=0.0001)
+    #
     experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name="COMA", \
                                 auto_param_logging=False, auto_metric_logging=False,
                                 log_graph=False, log_env_details=False, parse_args=False,
@@ -143,10 +143,12 @@ if __name__ == "__main__":
                 print('e', e)
                 coma.update_target()
 
-            gather_rollouts(coma, eps=max(0.5 - e*0.00005, 0.05))
+            gather_rollouts(coma, eps=0.15 - e*0.05/4000)
 
-            coma.fit_critic()
-            coma.fit_actor(eps=max(0.5 - e*0.00005, 0.05))
+            critic_loss = coma.fit_critic()
+            print("loss", critic_loss)
+
+            coma.fit_actor()
 
             # print("reward: {0:5.2f}, actor loss: {1:5.2f}, critic loss: {2:5.2f}".format(
             #     coma.metrics['mean_reward'],

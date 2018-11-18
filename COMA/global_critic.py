@@ -35,12 +35,12 @@ class GlobalCritic(torch.nn.Module):
         self.layers.append(nn.Linear(hidden_size, 1))
         self.sequential = nn.Sequential(*self.layers)
 
-        self.sequential.apply(self.init_weights)
+        #self.sequential.apply(self.init_weights)
 
     def init_weights(self, m):
         if type(m) == nn.Linear:
-            torch.nn.init.xavier_uniform(m.weight)
-            m.bias.data.fill_(0.01)
+            torch.nn.init.normal(m.weight, mean=0, std=0.001)
+            m.bias.data.fill_(0.001)
 
     def forward(self, state_action):
         """
