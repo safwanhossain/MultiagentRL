@@ -17,24 +17,25 @@ class Critic(torch.nn.Module):
     input is joint state, joint action
     outputs the Q-value for that state-action pair
     """
-    def __init__(self, input_size, hidden_size):
+    def __init__(self, input_size, hidden_size, device):
 
         super(Critic, self).__init__()
         self.input_size = input_size
+        self.device = device
 
-        self.linear1 = nn.Linear( self.input_size, hidden_size)
-        self.linear2 = nn.Linear(hidden_size, hidden_size)
-
-        self.linear3 = nn.Linear(hidden_size, 1)
+        self.mlp = nn.Sequential(
+            nn.Linear( self.input_size, hidden_size),
+            nn.Linear(hidden_size, hidden_size),
+            nn.Linear(hidden_size, 1)
+        )
+        self.to(self.device)
 
     def forward(self, state_action):
         """
         :param state_action: joint action, global state
         :return: Q-value for the joint state
         """
-        h = torch.relu(self.linear1(state_action))
-        h = torch.relu(self.linear2(h))
-        return self.linear3(h)
+        return self.mlp(state_action)
 
 def unit_test():
     test_critic = Critic(10, 256)

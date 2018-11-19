@@ -17,15 +17,15 @@ class Critic(nn.Module):
     There are shared layers for all critics, and layers specific to each global critic. As such,
     it will return a Q value for each agent.
     """
-    def __init__(self, observation_size, action_size, num_agents, attention_heads, gpu=True):
+    def __init__(self, observation_size, action_size, num_agents, attention_heads, embedding_dim, device):
         super(Critic, self).__init__()
         self.num_agents = num_agents
-        self.gpu = gpu
         self.action_size = action_size
         self.observation_size = observation_size
         self.attention_heads = attention_heads
-        self.embedding_dim = 128
+        self.embedding_dim = embedding_dim
         self.attend_dim = self.embedding_dim // attention_heads
+        self.device = device
 
         # unique to each agent's Q function
         # F functions will use the state only embedding and return the Q value for all possible states. The way they
@@ -61,6 +61,8 @@ class Critic(nn.Module):
             self.Wk_layers.append(nn.Linear(self.embedding_dim, self.attend_dim, bias=False))
             self.V_layers.append(nn.Linear(self.embedding_dim, self.attend_dim, bias=False))
         self.weight_init(mean=0.0, std=0.02)
+
+        self.to(self.device)
     
     def get_non_attention_parameters(self):
         return (p for n, p in self.named_parameters() if 'layers' in n)
@@ -94,9 +96,7 @@ class Critic(nn.Module):
             to_concat = []
             for l in range(self.attention_heads):             # for each of the multiple attention heads
                 query = self.Wq_layers[l](ei_s[i])
-                total = torch.zeros(batch_size, self.attend_dim) 
-                if self.gpu:
-                    total = total.cuda() 
+                total = torch.zeros(batch_size, self.attend_dim).to(self.device)
                 for j in range(len(observation_vector)):
                     if i != j:
                         key = self.Wk_layers[l](ei_s[j])
@@ -112,8 +112,8 @@ class Critic(nn.Module):
             assert(xi.shape == (batch_size, self.embedding_dim))
             xi_s.append(xi)
         
-        all_action_q_for_agent = torch.zeros(self.num_agents, batch_size, self.action_size)
-        curr_action_q_for_agent = torch.zeros(self.num_agents, batch_size, 1)
+        all_action_q_for_agent = torch.zeros(self.num_agents, batch_size, self.action_size).to(self.device)
+        curr_action_q_for_agent = torch.zeros(self.num_agents, batch_size, 1).to(self.device)
         for i in range(self.num_agents):
             all_action_q = self.f_functions[i](torch.cat([xi_s[i], si_s[i]], dim=1))
             all_action_q_for_agent[i,:,:] = all_action_q

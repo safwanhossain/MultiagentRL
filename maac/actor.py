@@ -8,11 +8,12 @@ from utils.initializations import normal_init, xavier_init
 
 class Actor(torch.nn.Module):
 
-    def __init__(self, obs_size, action_size):
+    def __init__(self, obs_size, action_size, device):
         super(Actor, self).__init__()
         self.obs_size = obs_size
         self.action_size = action_size
         self.h_size = 256
+        self.device = device
 
         self.batch_norm = nn.BatchNorm1d(self.obs_size, affine=False)
         self.model = torch.nn.Sequential(
@@ -26,6 +27,8 @@ class Actor(torch.nn.Module):
         # self.weight_init(mean=0.0, std=0.02)
         self.model.apply(xavier_init)
 
+        self.to(self.device)
+
     def forward(self, observation, eps, get_regularized=False):
         """
         outputs prob dist over possible actions, using an eps-bounded softmax for exploration
@@ -38,7 +41,7 @@ class Actor(torch.nn.Module):
 
         # Get a discrete probability  distribution over the action space
         ret = observation if observation.shape[0] == 1 else self.batch_norm(observation)
-        ret = self.model(ret.cuda())
+        ret = self.model(ret)
         softmax_ret = nn.functional.softmax(ret)
         softmax_ret = (1 - eps) * softmax_ret + eps / self.action_size
 

@@ -1,13 +1,11 @@
 #!/usr/bin/python3
-from comet_ml import Experiment
-
+from utils.base_model import BaseModel
 from actors import GRUActor, MLPActor
 from environment.particle_env import make_env, visualize
 from critic import Critic
 import numpy as np
 
 from utils.buffer import Buffer
-from utils.gather_batch import gather_batch
 
 import torch
 import time
@@ -21,22 +19,20 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
     
 """
 
-class COMA():
+class COMA(BaseModel):
 
     def __init__(self, env, critic_arch, policy_arch, batch_size, seq_len, discount, lam, h_size,
-                 lr_critic=0.0005, lr_actor=0.0002, eps=0.01):
+                 lr_critic=0.0005, lr_actor=0.0002, eps=0.01, use_gpu=True):
         """
+        Initialize all aspects of the model
+        :param env: Environment model will be used in
         :param batch_size:
         :param seq_len: horizon
         :param discount: discounting factor
         :param lam: for TD(lambda) return
-        :param n_agents:
-        :param action_size: size of the discrete action space, actions are as one-hot vectors
-        :param obs_size:
-        :param state_size: size of global state
         :param h_size: size of GRU state
         """
-        super(COMA, self).__init__()
+        super(COMA, self).__init__(use_gpu=use_gpu)
         self.batch_size = batch_size
         self.seq_len = seq_len
         self.discount = discount
@@ -50,19 +46,8 @@ class COMA():
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
         self.eps = eps
-        self.epochs = 4000
-        self.metrics = {}
-
-        self.params = {
-            "batch_size": batch_size,
-            "seq_len": seq_len,
-            "discount": discount,
-            "n_agents": env.n,
-            "h_size": h_size,
-            "lambda": lam,
-            "lr_critic": lr_critic,
-            "lr_actor": lr_actor,
-                }
+        self.epochs = 1
+        self.num_updates = 1
 
         self.critic_arch = critic_arch
         self.policy_arch = policy_arch
@@ -72,13 +57,14 @@ class COMA():
                              self.n_agents, env.agent_obs_size, env.global_state_size, env.action_size)
 
         # Create "placeholders" for incoming training data (Sorry, tensorflow habit)
-        # will be set with process_data
-
         # joint-action state pairs
-        self.joint_action_state_pl = torch.zeros((batch_size, seq_len, state_size+self.action_size*self.n_agents))
+        self.joint_action_state_pl = torch.zeros((batch_size, seq_len, self.state_size+self.action_size*self.n_agents))
+        self.joint_action_state_pl = self.joint_action_state_pl.to(self.device)
 
         # obs, prev_action pairs, one tensor for each agent
-        self.actor_input_pl = [torch.zeros((batch_size, seq_len, obs_size+self.action_size+self.n_agents)) for n in range(self.n_agents)]
+        self.actor_input_pl = \
+            [torch.zeros((batch_size, seq_len, self.obs_size+self.action_size+self.n_agents)).to(self.device)
+            for _ in range(self.n_agents)]
 
         # sequence of immediate rewards
         self.reward_seq_pl = np.zeros((batch_size, seq_len))
@@ -87,26 +73,35 @@ class COMA():
         # specify GRU or MLP policy
         ActorType = policy_arch['type']
         # actor takes in agent index as well
-        self.actor = ActorType(input_size=obs_size + self.action_size + self.n_agents,
-                           h_size=policy_arch['h_size'],
-                           action_size = self.action_size)
+        self.actor = ActorType(input_size=self.obs_size + self.action_size + self.n_agents,
+                               h_size=policy_arch['h_size'],
+                               action_size = self.action_size,
+                               device=self.device)
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.lr_actor, eps=1e-08)
 
-        self.critic = Critic(input_size=self.action_size*(self.n_agents) + state_size,
-                                   hidden_size=critic_arch['h_size'])#,
-                                   # n_layers=critic_arch['n_layers'])
+        self.critic = Critic(input_size=self.action_size*(self.n_agents) + self.state_size,
+                             hidden_size=critic_arch['h_size'],
+                             device=self.device)#,
+                             # n_layers=critic_arch['n_layers'])
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.lr_critic, eps=1e-08)
 
-        self.target_critic = Critic(input_size=self.action_size*(self.n_agents) + state_size,
-                                          hidden_size=critic_arch['h_size'])#,
-                                          # n_layers=critic_arch['n_layers'])
+        self.target_critic = Critic(input_size=self.action_size*(self.n_agents) + self.state_size,
+                                    hidden_size=critic_arch['h_size'],
+                                    device=self.device)#,
+                                    # n_layers=critic_arch['n_layers'])
+        self.params["lam"] = self.lam
+        self.set_params()
+        self.experiment.log_multiple_params(self.policy_arch)
+        self.experiment.log_multiple_params(self.critic_arch)
 
-    def update_target(self):
+    def update_target_network(self):
         """
         Updates the target network with the critic's weights
         :return:
         """
         self.target_critic.load_state_dict(self.critic.state_dict())
 
-    def fit_actor(self, eps):
+    def update_actor(self, eps):
         """
         Updates the actor using policy gradient with counterfactual baseline.
         Accumulates actor gradients from each agent and performs the update for every time-step
@@ -120,14 +115,13 @@ class COMA():
 
         # print("q_vals", q_vals)
 
-        diff_actions = torch.zeros_like(self.joint_action_state_pl)
+        diff_actions = torch.zeros_like(self.joint_action_state_pl).to(self.device)
 
         # initialize the advantage for each agent, by copying the Q values
         advantage = [q_vals.clone().detach() for a in range(self.n_agents)]
 
         # Optimizer
-        optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.lr_actor, eps=1e-08)
-        optimizer.zero_grad()
+        self.actor_optimizer.zero_grad()
 
         sum_loss = 0.0
 
@@ -175,17 +169,16 @@ class COMA():
 
             # compute the gradients of the policy network using the advantage
             # do not use optimizer.zero_grad() since we want to accumulate the gradients for all agents
-            loss.backward(torch.ones(self.batch_size, self.seq_len))
+            loss.backward(torch.ones(self.batch_size, self.seq_len).to(self.device))
 
         # after computing the gradient for all agents, perform a weight update on the policy network
-        optimizer.step()
-        optimizer.zero_grad()
-        self.metrics["mean_actor_loss"] = sum_loss / self.n_agents
+        self.actor_optimizer.step()
+        self.actor_optimizer.zero_grad()
 
-        return sum_loss / self.n_agents
+        return sum_loss / self.n_agents * self.seq_len
 
 
-    def fit_critic(self):
+    def update_critic(self):
         """
         Updates the critic using the off-line lambda return algorithm
         :return:
@@ -203,10 +196,10 @@ class COMA():
         # print(total_return[0])
 
         # initialize the first column with estimates from the target Q network
-        predictions = self.target_critic.forward(self.joint_action_state_pl).squeeze()
+        predictions = self.target_critic(self.joint_action_state_pl).squeeze()
 
         # use detach to assign to numpy array
-        G[:, :, 0] = predictions.detach().numpy()
+        G[:, :, 0] = predictions.detach().cpu().numpy()
 
         # by moving backwards, construct the G matrix
         for t in range(self.seq_len - 1, -1, -1):
@@ -223,10 +216,7 @@ class COMA():
                     G[:, t, n] = self.reward_seq_pl[:, t] + self.discount*G[:, t+1, n-1]
 
         # compute target at timestep t
-        targets = torch.zeros((self.batch_size, self.seq_len), dtype=torch.float32)
-
-        # Optimizer
-        optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.lr_critic, eps=1e-08)
+        targets = torch.zeros((self.batch_size, self.seq_len), dtype=torch.float32).to(self.device)
 
         sum_loss = 0.
 
@@ -239,25 +229,24 @@ class COMA():
             weights = weights / np.sum(weights)
 
             print('t', t)
-            targets[:, t] = torch.from_numpy(G[:, t, 1:self.seq_len-t+1].dot(weights))
+            targets[:, t] = torch.from_numpy(G[:, t, 1:self.seq_len-t+1].dot(weights)).to(self.device)
             print('target', targets[0, t])
-            pred = self.critic.forward(self.joint_action_state_pl[:, t]).squeeze()
+            pred = self.critic(self.joint_action_state_pl[:, t]).squeeze()
             print('pred', pred[0])
 
             loss = torch.mean(torch.pow(targets[:, t] - pred, 2)) / self.seq_len
             sum_loss += loss.item()
             # print("critic loss", sum_loss)
             # fit the Critic
-            optimizer.zero_grad()
+            self.critic_optimizer.zero_grad()
             loss.backward()
-            optimizer.step()
+            self.critic_optimizer.step()
 
-        self.metrics["mean_critic_loss"] = sum_loss / self.seq_len
         return sum_loss / self.seq_len
 
     def format_buffer_data(self):
         """
-        Reshape buffer data to correct dimensions
+        Reshape buffer data to correct dimensions for maac
         """
         self.reward_seq_pl[:, :] = self.buffer.rewards[:, :].numpy()
 
@@ -277,54 +266,46 @@ class COMA():
             self.actor_input_pl[n][:, :, :] = actor_input
 
     def policy(self, obs, prev_action, n):
+        """
+        Return probability distribution over actions given observation
+        :param obs: observation from environment for agent n
+        :param prev_action: last action of this agent
+        :param n: agent index
+        :return: probability distribution of type torch tensor
+        """
         agent_idx = torch.zeros(self.n_agents).scatter(0, torch.zeros(self.n_agents).fill_(n).long() , 1)
-        actor_input = torch.cat((obs, prev_action, agent_idx)).view(1, 1, -1).type(torch.FloatTensor)
+        actor_input = torch.cat((obs, prev_action, agent_idx))
+        actor_input = actor_input.view(1, 1, -1).type(torch.FloatTensor).to(self.device)
         return coma.actor(actor_input, eps=self.eps)[0][0]
 
-    def train(self):
-        experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name="COMA", \
-                                auto_param_logging=False, auto_metric_logging=False,
-                                log_graph=False, log_env_details=False, parse_args=False,
-                                disabled=True)
+    def update(self, epoch):
+        """
+        update model
+        """
+        self.format_buffer_data()
 
-        experiment.log_multiple_params(coma.params)
-        experiment.log_multiple_params(coma.policy_arch)
-        experiment.log_multiple_params(coma.critic_arch)
+        critic_loss = self.update_critic()
+        actor_loss = self.update_actor(eps=max(0.5 - epoch * 0.00005, 0.05))
+        if epoch % 2 == 0:
+            print('e', epoch)
+            self.update_target_network()
 
-        for e in range(self.epochs):
-            gather_batch(self.env, self)
-            experiment.log_multiple_metrics(coma.metrics)
-            experiment.set_step(e)
-
-            self.format_buffer_data()
-
-            self.fit_critic()
-            self.fit_actor(eps=max(0.5 - e * 0.00005, 0.05))
-
-            self.buffer.reset()
-
-            if e % 2 == 0:
-                print('e', e)
-                self.update_target()
+        self.buffer.reset()
+        return critic_loss, actor_loss
 
 
 if __name__ == "__main__":
-
-    n = 2
-    obs_size = 4 + 2*(n-1) + 2*n
-    state_size = 4*n + 2*n
-
-    env = make_env(n_agents=n)
+    env = make_env(n_agents=2)
 
     policy_arch = {'type': GRUActor, 'h_size': 128}
     critic_arch = {'h_size': 64, 'n_layers':1}
 
     coma = COMA(env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                batch_size=50, seq_len=50, discount=0.8, lam=0.8, h_size=128, lr_critic=0.0005, lr_actor=0.0002)
+                batch_size=50, seq_len=50, discount=0.8, lam=0.8, h_size=128, lr_critic=0.0005, lr_actor=0.0002,
+                use_gpu=False)
 
-
-
-
+    st = time.time()
     coma.train()
+    print("Time taken for 100 epochs {0:10.4f}".format(time.time() - st))
 
     visualize(coma)

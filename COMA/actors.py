@@ -8,17 +8,18 @@ class GRUActor(torch.nn.Module):
     ''' This network, takes in observations, and returns an action. Action space is discrete,
     '''
 
-    def __init__(self, input_size, h_size, action_size):
+    def __init__(self, input_size, h_size, action_size, device):
         super(GRUActor, self).__init__()
         self.input_size = input_size
         self.action_size = action_size
         self.h_size = h_size
+        self.device = device
 
         self.actor_gru = torch.nn.GRU(input_size=input_size,
                                       hidden_size=h_size,
-                                      batch_first=True)
+                                      batch_first=True).to(self.device)
 
-        self.linear = torch.nn.Linear(h_size, self.action_size)
+        self.linear = torch.nn.Linear(h_size, self.action_size).to(self.device)
 
     def forward(self, obs_seq, eps):
         """
@@ -31,7 +32,7 @@ class GRUActor(torch.nn.Module):
         """
         batch_size = obs_seq.size()[0]
         # initial state, shape (num_layers * num_directions, batch, hidden_size)
-        h0 = torch.zeros(1, batch_size, self.h_size)
+        h0 = torch.zeros(1, batch_size, self.h_size).to(self.device)
 
         # output has shape [batch, seq_len, h_size]
         output, hn = self.actor_gru(obs_seq, h0)

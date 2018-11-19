@@ -5,36 +5,27 @@ import torch
 import time
 
 def visualize(model):
-    joint_action = torch.zeros((model.n_agents, model.action_size))
-    joint_action[:, 0] = 1
+    actions = torch.zeros((model.n_agents, model.action_size))
+    actions[:, 0] = 1
     model.env.reset()
 
     for t in range(model.seq_len):
         model.env.render()
         time.sleep(0.05)
         # get observations
-        obs_n, reward_n, done_n, info_n = env.step(joint_action)
+        obs_n, state, reward = model.env.step(actions)
 
         # reset the joint action, one-hot representation
-        joint_action = np.zeros((model.n_agents, model.action_size))
+        actions = torch.zeros((model.n_agents, model.action_size))
 
         # for each agent, save observation, compute next action
         for n in range(model.n_agents):
-            # one-hot agent index
-            agent_idx = np.zeros(model.n_agents)
-            agent_idx[n] = 1
 
-            # get distribution over actions
-            obs_action = np.concatenate((obs_n[n][0:model.obs_size], joint_action[n, :], agent_idx))
-            actor_input = torch.from_numpy(obs_action).view(1, 1, -1).type(torch.FloatTensor)
-
-            pi = model.actor.forward(actor_input, eps=0)
+            pi = model.policy(obs_n[n], actions[n, :], n).cpu()
 
             # sample action from pi, convert to one-hot vector
-            action_idx = (torch.multinomial(pi[0, 0, :], num_samples=1)).numpy()
-            action = np.zeros(model.action_size)
-            action[action_idx] = 1
-            joint_action[n, :] = action
+            action_idx = torch.multinomial(pi, num_samples=1)
+            actions[n, :] = torch.zeros(model.action_size).scatter(0, action_idx, 1)
 
 class ParticleEnv(MultiAgentEnv):
     """
