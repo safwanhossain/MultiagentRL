@@ -20,6 +20,7 @@ class MAAC(BaseModel):
         super(MAAC, self).__init__(use_gpu=use_gpu)
         self.env = env
         self.batch_size = 1024
+        self.num_entries_per_update = self.batch_size
         self.seq_len = 100
         self.discount = 0.95
         self.n_agents = env.n
@@ -28,10 +29,8 @@ class MAAC(BaseModel):
         self.use_gpu = use_gpu
         self.sequence_length = 25
         self.epochs = 10
-        self.h_size = 128
         self.lr_critic = 0.01
         self.lr_actor = 0.01
-        self.eps = 0.01
         self.tau = 0.002
         self.alpha = 0.2
         self.attend_tau = 0.04
@@ -49,9 +48,9 @@ class MAAC(BaseModel):
         # We usually have two versions of the critic, as TD lambda is trained thru bootstraping. self.critic
         # is the "True" critic and target critic is the one used for training
         self.critic = Critic(observation_size=self.obs_size,action_size=self.action_size, device=self.device,
-                             num_agents=self.n_agents, embedding_dim=self.h_size, attention_heads=4)
+                             num_agents=self.n_agents, embedding_dim=128, attention_heads=4)
         self.target_critic = Critic(observation_size=self.obs_size,action_size=self.action_size, device=self.device,
-                                    num_agents=self.n_agents,  embedding_dim=self.h_size, attention_heads=4)
+                                    num_agents=self.n_agents,  embedding_dim=128, attention_heads=4)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=self.lr_critic, weight_decay=1e-3)
 
         self.set_params()
@@ -81,10 +80,11 @@ class MAAC(BaseModel):
         critic_values = self.critic(curr_agent_obs_batch, action_batch)
         
         # Sample a batch of actions given the next observation (for the target network)
+        # TODO: This can be sped up if we don't use target agents
         agent_probs = torch.zeros(self.n_agents, batch_size, 1).to(self.device)
         next_joint_actions = torch.zeros(self.n_agents, batch_size, self.action_size).to(self.device)
         for n in range(self.n_agents):
-            probs = self.target_agents[n](next_agent_obs_batch[n], self.eps)
+            probs = self.target_agents[n](next_agent_obs_batch[n], 0)
             action_ids = torch.multinomial(probs, 1)
             next_joint_actions[n] = torch.FloatTensor(probs.shape).to(self.device).fill_(0).scatter_(1, action_ids, 1)
             agent_probs[n] = probs.gather(1, action_ids)
@@ -104,7 +104,7 @@ class MAAC(BaseModel):
         critic_loss.backward()
         self.critic_optimizer.step()
 
-        return torch.mean(critic_loss.detach().cpu()).numpy() / self.seq_len
+        return torch.mean(critic_loss).item() / self.seq_len
 
     
     def update_actor(self):
@@ -121,7 +121,7 @@ class MAAC(BaseModel):
         agent_probs = torch.zeros(self.n_agents, batch_size, 1).to(self.device)
         next_joint_actions = torch.zeros(self.n_agents, batch_size, self.action_size).to(self.device)
         for n in range(self.n_agents):
-            probs = self.agents[n](curr_agent_obs_batch[n], eps=self.eps)
+            probs = self.agents[n](curr_agent_obs_batch[n], eps=0)
             action_ids = torch.multinomial(probs, 1)
             next_joint_actions[n] = torch.FloatTensor(probs.shape).to(self.device).fill_(0).scatter_(1, action_ids, 1)
             agent_probs[n] = probs.gather(1, action_ids)
@@ -141,7 +141,7 @@ class MAAC(BaseModel):
             self.agent_optimizers[n].zero_grad()
             loss.backward(retain_graph=True)
             self.agent_optimizers[n].step()
-            sum_loss += torch.mean(loss.detach().cpu()).numpy()
+            sum_loss += torch.mean(loss).item()
 
         return sum_loss / (self.n_agents * self.seq_len)
 
@@ -162,7 +162,7 @@ class MAAC(BaseModel):
             for target_param, param in zip(self.target_agents[n].get_params(), self.agents[n].get_params()):
                 target_param.data.copy_(target_param.data * self.tau + param.data * (1 - self.attend_tau))
 
-    def policy(self, obs, prev_action, n):
+    def policy(self, obs, prev_action, n, eps):
         """
         return probability distribution over actions given observation
         :param obs: observation from environment for agent n
@@ -170,7 +170,7 @@ class MAAC(BaseModel):
         :param n: agent index
         :return: probability distribution of type torch tensor
         """
-        return self.agents[n](obs.view(-1, self.obs_size).to(self.device), eps=self.eps)[0]
+        return self.agents[n](obs.view(-1, self.obs_size).to(self.device), eps=eps)[0]
 
     def update(self, epoch):
         """
@@ -191,7 +191,7 @@ def main():
 
     st = time.time()
     model.train()
-    print("Time taken for 100 epochs {0:10.4f}".format(time.time() - st))
+    print("Time taken for {0:d} epochs {1:10.4f}".format(model.epochs, time.time() - st))
 
     visualize(model)
 

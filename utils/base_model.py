@@ -12,7 +12,7 @@ class BaseModel:
         super().__init__()
         self.experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name=self.__class__.__name__,
                                      auto_param_logging=False, auto_metric_logging=False,
-                                     disabled=track_results)
+                                     disabled=(not track_results))
         self.use_gpu = use_gpu
 
         self.device = torch.device('cuda:0' if torch.cuda.is_available() and use_gpu else 'cpu')
@@ -29,19 +29,18 @@ class BaseModel:
             "seq_len": self.seq_len,
             "discount": self.discount,
             "n_agents": self.env.n,
-            "h_size": self.h_size,
             "lr_critic": self.lr_critic,
             "lr_actor": self.lr_actor,
         })
         self.experiment.log_multiple_params(self.params)
 
-    def gather_batch(self):
+    def gather_batch(self, eps):
         """
         Fills data buffer with (o, o', s, s', a, r) tuples generated from simulating environment
         """
         count = 0
         rewards = []
-        while count < self.batch_size:
+        while count < self.num_entries_per_update:
             # initialize action to noop
             actions = torch.zeros(self.n_agents, self.env.action_size)
             actions[:, 0] = 1
@@ -51,7 +50,7 @@ class BaseModel:
             for t in range(self.seq_len):
                 # for each agent, save observation, compute next action
                 for n in range(self.n_agents):
-                    pi = self.policy(curr_agent_obs[n], actions[n, :], n).cpu()
+                    pi = self.policy(curr_agent_obs[n], actions[n, :], n, eps).cpu()
                     # sample action from pi, convert to one-hot vector
                     action_idx = torch.multinomial(pi, num_samples=1)
                     actions[n, :] = torch.zeros(self.action_size).scatter(0, action_idx, 1)
@@ -65,7 +64,7 @@ class BaseModel:
                 rewards.append(reward)
 
             count += self.seq_len
-        print("Mean reward for this batch: {0:10.3}".format(np.mean(rewards)))
+        print("Mean reward for this batch: {0:5.3}".format(np.mean(rewards)))
         return np.mean(rewards)
 
     def train(self):
@@ -74,7 +73,7 @@ class BaseModel:
         """
         metrics = {}
         for e in range(self.epochs):
-            metrics["Reward"] = self.gather_batch()
+            metrics["Reward"] = self.gather_batch(eps=max(0.01, 0.15 - 0.15*e/self.epochs))
             metrics["Critic Loss"], metrics["Agent Loss"] = self.update(e)
 
             self.experiment.log_multiple_metrics(metrics)

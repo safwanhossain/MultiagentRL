@@ -1,7 +1,6 @@
 #!/usr/bin/python3
-
+from utils.initializations import normal_init, xavier_init
 import torch
-import numpy as np
 import torch.nn as nn
 
 """ The Global, Centralized Critic. This is able to observe all states and actions and approximates the 
@@ -11,23 +10,32 @@ Inconsistencies are possible with the 'efficient' version of the critic,
 Use as target network (briefly mentioned in the appendix of the paper)
 """
 
-class Critic(torch.nn.Module):
+class Critic(nn.Module):
     """
     Vanilla global Q-function,
     input is joint state, joint action
     outputs the Q-value for that state-action pair
     """
-    def __init__(self, input_size, hidden_size, device):
-
+    def __init__(self, input_size, hidden_size, n_layers, device):
+        """
+        :param input_size: size of input
+        :param hidden_size: number of hidden units in layer
+        :param n_layers: number of hidden layers
+        :param device: cpu or gpu
+        """
         super(Critic, self).__init__()
         self.input_size = input_size
         self.device = device
 
-        self.mlp = nn.Sequential(
-            nn.Linear( self.input_size, hidden_size),
-            nn.Linear(hidden_size, hidden_size),
-            nn.Linear(hidden_size, 1)
-        )
+        self.layers = [nn.Linear(self.input_size, hidden_size), nn.ReLU()]
+
+        for n in range(n_layers):
+            self.layers.append(nn.Linear(hidden_size, hidden_size))
+            self.layers.append(nn.ReLU())
+
+        self.layers.append(nn.Linear(hidden_size, 1))
+        self.mlp = nn.Sequential(*self.layers)
+        # self.apply(normal_init)
         self.to(self.device)
 
     def forward(self, state_action):

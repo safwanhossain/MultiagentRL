@@ -47,6 +47,7 @@ class Buffer():
         self.next_global_state = torch.zeros(self.max_episodes, self.seq_len, self.global_obs_size)
         self.actions = torch.zeros(self.max_episodes, self.seq_len, self.n_agents, self.action_size)
         self.rewards = torch.zeros(self.max_episodes, self.seq_len)
+        self.samples_per_episode = 0
         self.buffer_index = 0
         self.full = False
 

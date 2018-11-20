@@ -21,7 +21,7 @@ def visualize(model):
         # for each agent, save observation, compute next action
         for n in range(model.n_agents):
 
-            pi = model.policy(obs_n[n], actions[n, :], n).cpu()
+            pi = model.policy(obs_n[n], actions[n, :], n, eps=0).cpu()
 
             # sample action from pi, convert to one-hot vector
             action_idx = torch.multinomial(pi, num_samples=1)
@@ -40,8 +40,8 @@ class ParticleEnv(MultiAgentEnv):
         Total 5
 
     Agent Observation space:
-        Own position (x, y)
         Own velocity (x, y)
+        Own position (x, y)
         Landmark positions with respect to self n * (x, y)
         The positions of other agents with respect self (n - 1) * (x, y)
         Total = (2 + 2 + 2n + 2(n - 1)) = 4n + 2
