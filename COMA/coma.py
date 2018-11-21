@@ -22,7 +22,7 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
 class COMA(BaseModel):
 
     def __init__(self, env, critic_arch, policy_arch, batch_size, seq_len, discount, lam,
-                 lr_critic=0.0005, lr_actor=0.0001, use_gpu=True):
+                 lr_critic=0.0005, lr_actor=0.0001, use_gpu=False):
         """
         Initialize all aspects of the model
         :param env: Environment model will be used in
@@ -244,21 +244,17 @@ class COMA(BaseModel):
         """
         self.reward_seq_pl[:, :] = self.buffer.rewards[:, :].numpy()
 
-        self.joint_action_state_pl[:, :, :self.state_size] = self.buffer.curr_global_state[:, :, :]
-        self.joint_action_state_pl[:, :, self.state_size:] = self.buffer.actions.view(self.batch_size, self.seq_len, -1)
-        self.joint_action_state_pl.requires_grad_(True)
-
-        noops = torch.zeros(self.batch_size, 1, self.n_agents, env.action_size)
-        noops[:, 0, :, 0] = 1
-        prev_action = torch.cat((noops, self.buffer.actions[:, :-1, :, :]), dim=1)
+        self.joint_action_state_pl[:, :, :self.action_size * self.n_agents] = self.buffer.actions.view(self.batch_size, self.seq_len, -1)
+        self.joint_action_state_pl[:, :, self.action_size * self.n_agents:] = self.buffer.next_global_state[:, :, :]
 
         for n in range(self.n_agents):
             agent_idx = torch.zeros(self.batch_size, self.seq_len, self.n_agents)
             agent_idx = agent_idx.scatter(2, torch.zeros(agent_idx.shape).fill_(n).long(), 1)
 
-            actor_input = torch.cat((self.buffer.curr_agent_obs[:, :, n, :], prev_action[:, :, n, :], agent_idx), dim=2)
+            actor_input = torch.cat((self.buffer.next_agent_obs[:, :, n, :], self.buffer.actions[:, :, n, :], agent_idx), dim=2)
             actor_input = actor_input.view(self.batch_size, self.seq_len, -1).type(torch.FloatTensor)
             self.actor_input_pl[n][:, :, :] = actor_input
+
         return None
 
     def policy(self, obs, prev_action, n, eps):
@@ -280,11 +276,12 @@ class COMA(BaseModel):
         """
         self.format_buffer_data()
 
-        critic_loss = self.update_critic()
-        actor_loss = self.update_actor()
-        if epoch % 5 == 0:
+        if epoch % 2 == 0:
             # print('e', epoch)
             self.update_target_network()
+
+        critic_loss = self.update_critic()
+        actor_loss = self.update_actor()
 
         self.buffer.reset()
         return critic_loss, actor_loss
@@ -297,7 +294,7 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 128, 'n_layers':2}
 
     model = COMA(env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                batch_size=30, seq_len=100, discount=0.8, lam=0.8, lr_critic=0.0002, lr_actor=0.0001, use_gpu=True)
+                batch_size=30, seq_len=100, discount=0.8, lam=0.8, lr_critic=0.0005, lr_actor=0.0001, use_gpu=False)
 
     st = time.time()
     model.train()

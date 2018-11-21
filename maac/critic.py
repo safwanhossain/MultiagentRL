@@ -72,7 +72,7 @@ class Critic(nn.Module):
 
     def weight_init(self, mean, std):
         for m in self._modules:
-            normal_init(self._modules[m], mean, std)
+            normal_init(self._modules[m])
        
     def forward(self, observation_vector, action_vector, ret_all_actions=False):
         """

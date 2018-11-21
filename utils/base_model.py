@@ -44,26 +44,28 @@ class BaseModel:
             # initialize action to noop
             actions = torch.zeros(self.n_agents, self.env.action_size)
             actions[:, 0] = 1
-            np.random.seed()
+            # np.random.seed()
             curr_agent_obs, curr_global_state, reward = self.env.reset()
 
             for t in range(self.seq_len):
-                # for each agent, save observation, compute next action
-                for n in range(self.n_agents):
-                    pi = self.policy(curr_agent_obs[n], actions[n, :], n, eps).cpu()
-                    # sample action from pi, convert to one-hot vector
-                    action_idx = torch.multinomial(pi, num_samples=1)
-                    actions[n, :] = torch.zeros(self.action_size).scatter(0, action_idx, 1)
-
-                # get observations, by executing current joint action
+                # get observations, by executing current action
                 # TODO add parallelism
                 next_agent_obs, next_global_state, reward = self.env.step(actions)
+
                 self.buffer.add_to_buffer(t, curr_agent_obs, next_agent_obs, curr_global_state, next_global_state,
                                            actions, reward)
                 curr_agent_obs, curr_global_state = next_agent_obs, next_global_state
                 rewards.append(reward)
 
+                # for each agent, save observation, compute next action
+                for n in range(self.n_agents):
+                    pi = self.policy(curr_agent_obs[n], actions[n, :], n, eps).cpu()
+                    # sample action from pi, convert to one-hot vector
+                    action_idx = (torch.multinomial(pi, num_samples=1))
+                    actions[n, :] = torch.zeros(self.action_size).scatter(0, action_idx, 1)
+
             count += self.seq_len
+
         print("Mean reward for this batch: {0:5.3}".format(np.mean(rewards)))
         return np.mean(rewards)
 
@@ -74,7 +76,7 @@ class BaseModel:
         metrics = {}
         for e in range(self.epochs):
             metrics["Reward"] = self.gather_batch(eps=max(0.01, 0.15 - 0.15*e/self.epochs))
-            metrics["Critic Loss"], metrics["Agent Loss"] = self.update(e)
+            metrics["Critic Loss"], metrics["Actor Loss"] = self.update(e)
 
             self.experiment.log_multiple_metrics(metrics)
             self.experiment.set_step(e)

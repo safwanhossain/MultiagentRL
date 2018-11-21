@@ -58,7 +58,7 @@ class MLPActor(nn.Module):
         self.h_size = h_size
         self.device = device
 
-        self.model = nn.Sequential(
+        self.mlp = nn.Sequential(
             nn.Linear(input_size, h_size),
             nn.ReLU(),
             nn.Linear(h_size, h_size),
@@ -80,7 +80,7 @@ class MLPActor(nn.Module):
         :param eps: softmax lower bound, for exploration
         :return:
         """
-        logits = self.model.forward(input)
+        logits = self.mlp(input)
 
         # compute eps-bounded softmax
         softmax = nn.functional.softmax(logits, dim=2)
