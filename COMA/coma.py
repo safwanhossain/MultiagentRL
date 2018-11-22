@@ -177,7 +177,6 @@ class COMA(BaseModel):
 
         return sum_loss / self.n_agents * self.seq_len
 
-
     def update_critic(self):
         """
         Updates the critic using the off-line lambda return algorithm
@@ -196,10 +195,10 @@ class COMA(BaseModel):
         # print(total_return[0])
 
         # initialize the first column with estimates from the target Q network
-        predictions = self.target_critic(self.joint_action_state_pl).squeeze()
+        predictions = self.target_critic.forward(self.joint_action_state_pl).squeeze()
 
         # use detach to assign to numpy array
-        G[:, :, 0] = predictions.detach().cpu().numpy()
+        G[:, :, 0] = predictions.detach().numpy()
 
         # by moving backwards, construct the G matrix
         for t in range(self.seq_len - 1, -1, -1):
@@ -209,18 +208,19 @@ class COMA(BaseModel):
 
                 # pure MC
                 if t + n > self.seq_len - 1:
-                    G[:, t, n] = total_return
+                    G[:, t, n] = self.reward_seq_pl[:, t:].dot(np.fromfunction(lambda i: self.discount**i,
+                                                                                 shape=(self.seq_len-t,)))
 
                 # combination of MC + bootstrapping
                 else:
                     G[:, t, n] = self.reward_seq_pl[:, t] + self.discount*G[:, t+1, n-1]
 
         # compute target at timestep t
-        targets = torch.zeros((self.batch_size, self.seq_len), dtype=torch.float32).to(self.device)
+        targets = torch.zeros((self.batch_size, self.seq_len), dtype=torch.float32)
 
         sum_loss = 0.
 
-        for t in range(self.seq_len-1, -1, -1):
+        for t in range(self.seq_len-2, -1, -1):
 
             # vector of powers of lambda
             weights = np.fromfunction(lambda i: lam ** i, shape=(self.seq_len - t,))
@@ -229,9 +229,9 @@ class COMA(BaseModel):
             weights = weights / np.sum(weights)
 
             print('t', t)
-            targets[:, t] = torch.from_numpy(G[:, t, 1:self.seq_len-t+1].dot(weights)).to(self.device)
+            targets[:, t] = torch.from_numpy(G[:, t, 1:self.seq_len-t+1].dot(weights))
             print('target', targets[0, t])
-            pred = self.critic(self.joint_action_state_pl[:, t]).squeeze()
+            pred = self.critic.forward(self.joint_action_state_pl[:, t]).squeeze()
             print('pred', pred[0])
 
             loss = torch.mean(torch.pow(targets[:, t] - pred, 2)) / self.seq_len
@@ -242,8 +242,10 @@ class COMA(BaseModel):
             loss.backward()
             self.critic_optimizer.step()
 
+        self.metrics["mean_critic_loss"] = sum_loss / self.seq_len
         return sum_loss / self.seq_len
 
+   
     def format_buffer_data(self):
         """
         Reshape buffer data to correct dimensions for maac
