@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import torch.nn as nn
 from global_critic import GlobalCritic
-from actor import MLPActor, GRUActor
+from actor import *
 import marl_env
 
 
@@ -105,6 +105,13 @@ class COMA():
         # critic Optimizer
         self.critic_optimizer = torch.optim.RMSprop(self.critic.parameters(), lr=self.lr_critic, eps=1e-08)
 
+        if isinstance(self.actor, GRUActor):
+            AgentType = GRUAgent
+        else:
+            AgentType = MLPAgent
+
+        self.agents = [AgentType(self.actor) for n in range(self.n_agents)]
+
     def update_target(self):
         """
         Updates the target network with the critic's weights
@@ -138,8 +145,10 @@ class COMA():
         # computing baselines, by broadcasting across rollouts and time-steps
         for a in range(self.n_agents):
 
+            self.agents[a].reset_state()
+
             # get the dist over actions, based on each agent's observation, don't use epsilon while fitting
-            action_dist = self.actor.forward(self.actor_input_pl[a], eps=0)
+            action_dist = self.agents[a].get_action_dist(self.actor_input_pl[a], eps=0)
 
             # make a copy of the joint-action, state, to substitute different actions in it
             diff_actions.copy_(self.joint_action_state_pl)

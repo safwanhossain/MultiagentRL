@@ -3,6 +3,7 @@ import numpy as np
 import multiagent.policy 
 import torch
 import torch.nn as nn
+from abc import ABC, abstractmethod
 
 class Actor_Policy():
     ''' This is the class that the particle environment is used to. Requires the implementation
@@ -12,11 +13,90 @@ class Actor_Policy():
 
     def action(self, obs):
         actions = self.actor_network(obs, eps=0.1)
-        
+
+class Agent(ABC):
+
+    def __init__(self, actor_net):
+        self.actor_net = actor_net
+        self.h_state = None
+
+    @abstractmethod
+    def get_action(self, actor_input, **args):
+        pass
+
+    @abstractmethod
+    def get_action_dist(self, actor_input, **args):
+        pass
+
+    @abstractmethod
+    def reset_state(self, actor_input, **args):
+        pass
+
+class GRUAgent(Agent):
+
+    def __init__(self, actor_net):
+        """
+        :param actor_net: each agent gets an actor network,
+        allows for easily switching between shared vs non-shared params
+        """
+        super(GRUAgent, self).__init__(actor_net)
+
+        self.h_state = None
+
+    def get_action(self, actor_input, **args):
+
+        eps = args['eps']
+        action_dist, state = self.actor_net.forward(actor_input, eps, self.h_state)
+        self.h_state = state
+
+        action_idx = (torch.multinomial(action_dist[0, 0, :], num_samples=1)).numpy()
+        action = torch.zeros(self.actor_net.action_size)
+        action[action_idx] = 1
+        return action
+
+    def get_action_dist(self, actor_input, **args):
+
+        eps = args['eps']
+        action_dist, state = self.actor_net.forward(actor_input, eps, self.h_state)
+        self.h_state = state
+
+        return action_dist
+
+    def reset_state(self):
+        self.h_state = None
+
+
+class MLPAgent(Agent):
+    def __init__(self, actor_net):
+        """
+        :param actor_net: each agent gets an actor network,
+        allows for easily switching between shared vs non-shared params
+        """
+        super(MLPAgent, self).__init__(actor_net)
+
+    def get_action(self, actor_input, **args):
+        eps = args['eps']
+        action_dist = self.actor_net.forward(actor_input, eps)
+
+        action_idx = (torch.multinomial(action_dist[0, 0, :], num_samples=1)).numpy()
+        action = torch.zeros(self.actor_net.action_size)
+        action[action_idx] = 1
+        return action
+
+    def get_action_dist(self, actor_input, **args):
+        eps = args['eps']
+        action_dist, state = self.actor_net.forward(actor_input, eps, self.h_state)
+        self.h_state = state
+
+        return action_dist
+
+    def reset_state(self):
+        pass
+
 class GRUActor(torch.nn.Module):
+
     ''' This network, takes in observations, and returns an action. Action space is discrete,
     '''
-
     def __init__(self, input_size, h_size, action_size):
         super(GRUActor, self).__init__()
         self.input_size = input_size
@@ -29,12 +109,10 @@ class GRUActor(torch.nn.Module):
 
         self.linear = torch.nn.Linear(h_size, self.action_size)
 
-        self.h = None
-
         self.actor_gru.apply(self.init_weights)
         self.linear.apply(self.init_weights)
 
-    def forward(self, obs_seq, eps, reset=True):
+    def forward(self, obs_seq, eps, h_state=None):
         """
         outputs prob dist over possible actions, using an eps-bounded softmax for exploration
         input sequence shape is batch-first
@@ -46,16 +124,16 @@ class GRUActor(torch.nn.Module):
         batch_size = obs_seq.size()[0]
         # initial state, shape (num_layers * num_directions, batch, hidden_size)
 
-        if self.h is None or reset:
-            self.h = torch.zeros(1, batch_size, self.h_size)
+        if h_state is None:
+            h_state = torch.zeros(1, batch_size, self.h_size)
 
         # output has shape [batch, seq_len, h_size]
-        output, self.h = self.actor_gru(obs_seq, self.h)
+        output, h_state = self.actor_gru(obs_seq, h_state)
         logits = self.linear(output)
 
         # compute eps-bounded softmax
         softmax = torch.nn.functional.softmax(logits, dim=2)
-        return (1 - eps) * softmax + eps / self.action_size
+        return (1 - eps) * softmax + eps / self.action_size, h_state
 
     def init_weights(self, m):
         if type(m) == nn.Linear:

@@ -1,7 +1,7 @@
 """
 Train agents for particle environment using COMA
 """
-from comet_ml import Experiment
+# from comet_ml import Experiment
 from coma import COMA
 from actor import *
 import marl_env
@@ -25,7 +25,8 @@ def gather_rollouts(coma, eps):
         joint_action[:, 0] = 1
         coma.env.reset()
 
-        actor_reset = True
+        map(lambda agent: agent.reset_state(), coma.agents)
+
         for t in range(coma.seq_len):
 
             # get observations, by executing current joint action
@@ -39,6 +40,7 @@ def gather_rollouts(coma, eps):
 
             # for each agent, save observation, compute next action
             for n in range(coma.n_agents):
+
                 # one-hot agent index
                 agent_idx = np.zeros(coma.n_agents)
                 agent_idx[n] = 1
@@ -54,19 +56,13 @@ def gather_rollouts(coma, eps):
                 # save the actor input for training
                 coma.actor_input_pl[n][i, t, :] = actor_input
 
-                pi = coma.actor.forward(actor_input, eps)
-
-                # sample action from pi, convert to one-hot vector
-                action_idx = (torch.multinomial(pi[0, 0, :], num_samples=1)).numpy()
-                action = torch.zeros(coma.action_size)
-                action[action_idx] = 1
+                action=coma.agents[n].get_action(actor_input, eps=eps)
                 joint_action[n, :] = action
 
             # get the absolute landmark positions for the global state
             coma.global_state_pl[i, t, coma.n_agents * 4:] = torch.from_numpy(np.array(
                 [landmark.state.p_pos for landmark in coma.env.world.landmarks]).flatten())
 
-            actor_reset = False
 
     # concatenate the joint action, global state, set network inputs to torch tensors
     coma.joint_action_state_pl = torch.cat((coma.joint_action_pl, coma.global_state_pl), dim=-1)
@@ -114,27 +110,27 @@ def visualize(coma):
 
 if __name__ == "__main__":
 
-    n = 1
+    n = 2
     obs_size = 4 + 2*(n-1) + 2*n
     state_size = 4*n + 2*n
 
     env = marl_env.make_env('simple_spread', n_agents=n)
 
-    policy_arch = {'type': MLPActor, 'h_size': 128}
+    policy_arch = {'type': GRUActor, 'h_size': 128}
     critic_arch = {'h_size': 128, 'n_layers': 2}
 
     coma = COMA(env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                batch_size=30, seq_len=100, discount=0.8, lam=0.8, n_agents=n, action_size=5, obs_size=obs_size,
+                batch_size=1, seq_len=100, discount=0.8, lam=0.8, n_agents=n, action_size=5, obs_size=obs_size,
                      state_size=state_size, lr_critic=0.0005, lr_actor=0.0001)
     #
-    experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name="COMA", \
-                                auto_param_logging=False, auto_metric_logging=False,
-                                log_graph=False, log_env_details=False, parse_args=False,
-                                auto_output_logging=False)
+    # experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name="COMA", \
+    #                             auto_param_logging=False, auto_metric_logging=False,
+    #                             log_graph=False, log_env_details=False, parse_args=False,
+    #                             auto_output_logging=False)
 
-    experiment.log_multiple_params(coma.params)
-    experiment.log_multiple_params(coma.policy_arch)
-    experiment.log_multiple_params(coma.critic_arch)
+    # experiment.log_multiple_params(coma.params)
+    # experiment.log_multiple_params(coma.policy_arch)
+    # experiment.log_multiple_params(coma.critic_arch)
 
     # visualize(coma)
     try:
@@ -155,8 +151,8 @@ if __name__ == "__main__":
             #     coma.metrics['mean_actor_loss'],
             #     coma.metrics['mean_critic_loss']))
 
-            experiment.set_step(e)
-            experiment.log_multiple_metrics(coma.metrics)
+            # experiment.set_step(e)
+            # experiment.log_multiple_metrics(coma.metrics)
 
     except KeyboardInterrupt:
         visualize(coma)
