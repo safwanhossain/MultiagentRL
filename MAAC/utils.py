@@ -6,3 +6,12 @@ def normal_init(m, mean, std):
         m.weight.data.normal_(mean, std)
         m.bias.data.zero_()
 
+def disable_grad(module):
+    for param in module.parameters():
+        param.requires_grad = False
+
+def enable_grad(module):
+    for param in module.parameters():
+        param.requires_grad = True
+
+

@@ -35,10 +35,9 @@ class Actor_Network_Linear(torch.nn.Module):
             torch.nn.LeakyReLU(),
             torch.nn.Linear(self.h_size, self.h_size),
             torch.nn.LeakyReLU(),
-            torch.nn.Linear(self.h_size, action_size),
-            torch.nn.Softmax(dim=1)
+            torch.nn.Linear(self.h_size, action_size)
         )
-        self.weight_init(mean=0.0, std=0.02)
+        #self.weight_init(mean=0.0, std=0.02)
 
     def weight_init(self, mean, std):
         for m in self._modules:
