@@ -1,7 +1,7 @@
 """
 Train agents for particle environment using COMA
 """
-# from comet_ml import Experiment
+from comet_ml import Experiment
 from coma import COMA
 from actor import *
 import marl_env
@@ -25,7 +25,7 @@ def gather_rollouts(coma, eps):
         joint_action[:, 0] = 1
         coma.env.reset()
 
-        map(lambda agent: agent.reset_state(), coma.agents)
+        coma.reset_agents()
 
         for t in range(coma.seq_len):
 
@@ -78,7 +78,8 @@ def visualize(coma):
     joint_action[:, 0] = 1
     coma.env.reset()
 
-    actor_reset = True
+    coma.reset_agents()
+
     for t in range(coma.seq_len):
         coma.env.render()
         time.sleep(0.05)
@@ -98,19 +99,14 @@ def visualize(coma):
             obs_action = np.concatenate((obs_n[n][0:coma.obs_size], joint_action[n, :], agent_idx))
             actor_input = torch.from_numpy(obs_action).view(1, 1, -1).type(torch.FloatTensor)
 
-            pi = coma.actor.forward(actor_input, eps=0)
+            action = coma.agents[n].get_action(actor_input, eps=0)
 
-            # sample action from pi, convert to one-hot vector
-            action_idx = (torch.multinomial(pi[0, 0, :], num_samples=1)).numpy()
-            action = np.zeros(coma.action_size)
-            action[action_idx] = 1
             joint_action[n, :] = action
 
-        actor_reset = False
 
 if __name__ == "__main__":
 
-    n = 2
+    n = 1
     obs_size = 4 + 2*(n-1) + 2*n
     state_size = 4*n + 2*n
 
@@ -120,39 +116,35 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 128, 'n_layers': 2}
 
     coma = COMA(env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                batch_size=1, seq_len=100, discount=0.8, lam=0.8, n_agents=n, action_size=5, obs_size=obs_size,
-                     state_size=state_size, lr_critic=0.0005, lr_actor=0.0001)
-    #
-    # experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name="COMA", \
-    #                             auto_param_logging=False, auto_metric_logging=False,
-    #                             log_graph=False, log_env_details=False, parse_args=False,
-    #                             auto_output_logging=False)
+                batch_size=60, seq_len=30, discount=0.8, lam=0.8, n_agents=n, action_size=5, obs_size=obs_size,
+                     state_size=state_size, lr_critic=0.0002, lr_actor=0.0001)
 
-    # experiment.log_multiple_params(coma.params)
-    # experiment.log_multiple_params(coma.policy_arch)
-    # experiment.log_multiple_params(coma.critic_arch)
+    experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name="COMA", \
+                                auto_param_logging=False, auto_metric_logging=False,
+                                log_graph=False, log_env_details=False, parse_args=False,
+                                auto_output_logging=False)
+
+    experiment.log_multiple_params(coma.params)
+    #experiment.log_multiple_params({'initialization_std': 0.01})
+    experiment.log_multiple_params(coma.policy_arch)
+    experiment.log_multiple_params(coma.critic_arch)
 
     # visualize(coma)
     try:
         for e in range(4000):
-            if e % 2 == 0:
+            if e % 1 == 0:
                 print('e', e)
                 coma.update_target()
 
-            gather_rollouts(coma, eps=0.15 - e*0.05/4000)
+            gather_rollouts(coma, eps=0.05 - e*0.05/4000)
 
             critic_loss = coma.fit_critic()
             print("loss", critic_loss)
 
             coma.fit_actor()
 
-            # print("reward: {0:5.2f}, actor loss: {1:5.2f}, critic loss: {2:5.2f}".format(
-            #     coma.metrics['mean_reward'],
-            #     coma.metrics['mean_actor_loss'],
-            #     coma.metrics['mean_critic_loss']))
-
-            # experiment.set_step(e)
-            # experiment.log_multiple_metrics(coma.metrics)
+            experiment.set_step(e)
+            experiment.log_multiple_metrics(coma.metrics)
 
     except KeyboardInterrupt:
         visualize(coma)

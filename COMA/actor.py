@@ -85,8 +85,7 @@ class MLPAgent(Agent):
 
     def get_action_dist(self, actor_input, **args):
         eps = args['eps']
-        action_dist, state = self.actor_net.forward(actor_input, eps, self.h_state)
-        self.h_state = state
+        action_dist = self.actor_net.forward(actor_input, eps)
 
         return action_dist
 
@@ -110,7 +109,7 @@ class GRUActor(torch.nn.Module):
         self.linear = torch.nn.Linear(h_size, self.action_size)
 
         self.actor_gru.apply(self.init_weights)
-        self.linear.apply(self.init_weights)
+        #self.linear.apply(self.init_weights)
 
     def forward(self, obs_seq, eps, h_state=None):
         """
@@ -137,7 +136,7 @@ class GRUActor(torch.nn.Module):
 
     def init_weights(self, m):
         if type(m) == nn.Linear:
-            torch.nn.init.normal(m.weight, mean=0, std=0.001)
+            torch.nn.init.normal(m.weight, mean=0, std=0.01)
             m.bias.data.fill_(0.01)
 
 class MLPActor(torch.nn.Module):
@@ -155,7 +154,7 @@ class MLPActor(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Linear(h_size, action_size))
 
-        #self.model.apply(self.init_weights)
+        self.model.apply(self.init_weights)
 
     def forward(self, input, eps):
         """

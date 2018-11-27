@@ -39,7 +39,7 @@ class GlobalCritic(torch.nn.Module):
 
     def init_weights(self, m):
         if type(m) == nn.Linear:
-            torch.nn.init.normal(m.weight, mean=0, std=0.001)
+            torch.nn.init.normal(m.weight, mean=0, std=0.01)
             m.bias.data.fill_(0.001)
 
     def forward(self, state_action):

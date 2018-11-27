@@ -112,6 +112,10 @@ class COMA():
 
         self.agents = [AgentType(self.actor) for n in range(self.n_agents)]
 
+    def reset_agents(self):
+        for agent in self.agents:
+            agent.reset_state()
+
     def update_target(self):
         """
         Updates the target network with the critic's weights
@@ -141,6 +145,9 @@ class COMA():
         self.actor_optimizer.zero_grad()
 
         sum_loss = 0.0
+
+        # reset the hidden state of agents
+        self.reset_agents()
 
         # computing baselines, by broadcasting across rollouts and time-steps
         for a in range(self.n_agents):
@@ -241,7 +248,7 @@ class COMA():
 
         sum_loss = 0.
 
-        for t in range(self.seq_len-2, -1, -1):
+        for t in range(self.seq_len-3, -1, -1):
 
             # vector of powers of lambda
             weights = np.fromfunction(lambda i: lam ** i, shape=(self.seq_len - t,))
@@ -250,6 +257,7 @@ class COMA():
             weights = weights / np.sum(weights)
 
             print('t', t)
+            # n=1 1 step TD
             targets[:, t] = torch.from_numpy(G[:, t, 1:self.seq_len-t+1].dot(weights))
             print('target', targets[0, t])
             pred = self.critic.forward(self.joint_action_state_pl[:, t]).squeeze()
