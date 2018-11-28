@@ -22,7 +22,7 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
 class COMA(BaseModel):
 
     def __init__(self, env, critic_arch, policy_arch, batch_size, seq_len, discount, lam,
-                 lr_critic=0.0005, lr_actor=0.0001, use_gpu=False):
+                 lr_critic=0.0005, lr_actor=0.0002, use_gpu=True):
         """
         Initialize all aspects of the model
         :param env: Environment model will be used in
