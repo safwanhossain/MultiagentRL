@@ -20,12 +20,12 @@ def gather_rollouts(coma, eps):
     # Step 1: generate batch_size rollouts
     for i in range(coma.batch_size):
 
-        # initialize action to noop
+        #initialize action to noop
         joint_action = torch.zeros((coma.n_agents, coma.action_size))
         joint_action[:, 0] = 1
         coma.env.reset()
-
         coma.reset_agents()
+
 
         for t in range(coma.seq_len):
 
@@ -34,9 +34,6 @@ def gather_rollouts(coma, eps):
 
             # they all get the same reward, save the reward, divided by number of agents, to prevent large rewards and to compare with single agent experiments
             coma.reward_seq_pl[i, t] = reward_n[0] / coma.n_agents
-
-            # save the joint action for training
-            coma.joint_action_pl[i, t, :] = joint_action.flatten()
 
             # for each agent, save observation, compute next action
             for n in range(coma.n_agents):
@@ -49,7 +46,7 @@ def gather_rollouts(coma, eps):
                 # the global state consists of positions + velocity of agents, first 4 elements from obs
                 coma.global_state_pl[i, t, n * 4:4 * n + 4] = torch.from_numpy(obs_n[n][0:4])
 
-                # get distribution over actions, concatenate observation and prev action
+                # get distribution over actions, concatenate observation and prev action for actor training
                 obs_action = np.concatenate((obs_n[n][0:coma.obs_size], joint_action[n, :], agent_idx))
                 actor_input = torch.from_numpy(obs_action).view(1, 1, -1).type(torch.FloatTensor)
 
@@ -59,12 +56,16 @@ def gather_rollouts(coma, eps):
                 action=coma.agents[n].get_action(actor_input, eps=eps)
                 joint_action[n, :] = action
 
+                # save the next joint action for training
+                coma.joint_action_pl[i, t, :] = joint_action.flatten()
+
             # get the absolute landmark positions for the global state
             coma.global_state_pl[i, t, coma.n_agents * 4:] = torch.from_numpy(np.array(
                 [landmark.state.p_pos for landmark in coma.env.world.landmarks]).flatten())
 
 
     # concatenate the joint action, global state, set network inputs to torch tensors
+    # action taken at state s
     coma.joint_action_state_pl = torch.cat((coma.joint_action_pl, coma.global_state_pl), dim=-1)
 
     coma.joint_action_state_pl.requires_grad_(True)
@@ -106,18 +107,26 @@ def visualize(coma):
 
 if __name__ == "__main__":
 
-    n = 1
+    n = 2
     obs_size = 4 + 2*(n-1) + 2*n
     state_size = 4*n + 2*n
 
     env = marl_env.make_env('simple_spread', n_agents=n)
 
-    policy_arch = {'type': GRUActor, 'h_size': 128}
+    policy_arch = {'type': MLPActor, 'h_size': 128}
     critic_arch = {'h_size': 128, 'n_layers': 2}
 
+    # FLAGS:
+    SAC = False
+    TD_LAMDA = True
+    COMA_BASELINE = True
+    PARTIAL_OBS = True
+
+    flags = {"SAC":SAC, "TD_LAMBDA":TD_LAMDA, "COMA_BASELINE": COMA_BASELINE, "PARTIAL_OBS": PARTIAL_OBS}
+
     coma = COMA(env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                batch_size=60, seq_len=30, discount=0.8, lam=0.8, n_agents=n, action_size=5, obs_size=obs_size,
-                     state_size=state_size, lr_critic=0.0002, lr_actor=0.0001)
+                batch_size=60, seq_len=100, discount=0.8, lam=0.8, n_agents=n, action_size=5, obs_size=obs_size,
+                     state_size=state_size, lr_critic=0.0002, lr_actor=0.0001, flags=flags)
 
     experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name="COMA", \
                                 auto_param_logging=False, auto_metric_logging=False,
@@ -129,6 +138,11 @@ if __name__ == "__main__":
     experiment.log_multiple_params(coma.policy_arch)
     experiment.log_multiple_params(coma.critic_arch)
 
+    if not SAC:
+        eps = 0.15
+
+    else:
+        eps = 0
     # visualize(coma)
     try:
         for e in range(4000):
@@ -136,7 +150,7 @@ if __name__ == "__main__":
                 print('e', e)
                 coma.update_target()
 
-            gather_rollouts(coma, eps=0.05 - e*0.05/4000)
+            gather_rollouts(coma, eps=eps - e*eps/4000)
 
             critic_loss = coma.fit_critic()
             print("loss", critic_loss)

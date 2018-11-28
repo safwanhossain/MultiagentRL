@@ -131,7 +131,7 @@ class GRUActor(torch.nn.Module):
         logits = self.linear(output)
 
         # compute eps-bounded softmax
-        softmax = torch.nn.functional.softmax(logits, dim=2)
+        softmax = torch.nn.functional.softmax(logits, dim=-1)
         return (1 - eps) * softmax + eps / self.action_size, h_state
 
     def init_weights(self, m):
@@ -169,7 +169,7 @@ class MLPActor(torch.nn.Module):
         logits = self.model.forward(input)
 
         # compute eps-bounded softmax
-        softmax = torch.nn.functional.softmax(logits, dim=2)
+        softmax = torch.nn.functional.softmax(logits, dim=-1)
         return (1 - eps) * softmax + eps / self.action_size
 
     def init_weights(self, m):

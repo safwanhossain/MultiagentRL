@@ -20,7 +20,7 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
 class COMA():
 
     def __init__(self, env, critic_arch, policy_arch, batch_size, seq_len, discount, lam, n_agents, action_size,
-                 obs_size, state_size, lr_critic=0.0005, lr_actor=0.0002):
+                 obs_size, state_size, lr_critic=0.0005, lr_actor=0.0002, alpha=0.1, flags=None):
         """
         :param batch_size:
         :param seq_len: horizon
@@ -44,6 +44,8 @@ class COMA():
         self.env = env
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
+        self.alpha = alpha
+        self.flags = flags
         self.metrics = {}
 
         self.params = {
@@ -54,6 +56,7 @@ class COMA():
             "lambda": lam,
             "lr_critic": lr_critic,
             "lr_actor": lr_actor,
+            "alpha": alpha,
                 }
 
         self.critic_arch = critic_arch
@@ -140,7 +143,7 @@ class COMA():
         diff_actions = torch.zeros_like(self.joint_action_state_pl)
 
         # initialize the advantage for each agent, by copying the Q values
-        advantage = [q_vals.clone().detach() for a in range(self.n_agents)]
+        advantage = [q_vals.clone().detach() for a in range(self.n_agents) ]
 
         self.actor_optimizer.zero_grad()
 
@@ -160,7 +163,7 @@ class COMA():
             # make a copy of the joint-action, state, to substitute different actions in it
             diff_actions.copy_(self.joint_action_state_pl)
 
-            # get the chosen action for each agent
+            # get the chosen action at the next time step for each agent
             action_index = a * self.action_size
             chosen_action = self.joint_action_state_pl[:, :, action_index:action_index+self.action_size]
 
@@ -176,6 +179,11 @@ class COMA():
                 Q_u = self.critic.forward(diff_actions)
 
                 advantage[a] -= Q_u*action_dist[:, :, u].unsqueeze_(-1)
+
+            # if using soft actor critic, add the policy's entropy to the advantage
+            if self.flags["SAC"]:
+                # add entropy term, for chosen action at next step, mind the timestep correspondence
+                advantage[a][:, 0:-1, :] += self.alpha * torch.sum(torch.log(action_dist[:, 1, :])*chosen_action[:, 1:, :], dim=-1)
 
             # loss is negative log of probability of chosen action, scaled by the advantage
             # the advantage is treated as a scalar, so the gradient is computed only for log prob
@@ -214,13 +222,7 @@ class COMA():
 
         # first compute the future discounted return at every step using the sequence of rewards
 
-        G = np.zeros((self.batch_size, self.seq_len, self.seq_len + 1))
-        # print('rewards', self.reward_seq_pl[0, :])
-
-        # apply discount and sum
-        total_return = self.reward_seq_pl.dot(np.fromfunction(lambda i: self.discount**i, shape=(self.seq_len,)))
-
-        # print(total_return[0])
+        G = np.zeros((self.batch_size, self.seq_len, self.seq_len))
 
         # initialize the first column with estimates from the target Q network
         predictions = self.target_critic.forward(self.joint_action_state_pl).squeeze()
@@ -232,7 +234,7 @@ class COMA():
         for t in range(self.seq_len - 1, -1, -1):
 
             # loop from one-step lookahead to pure MC estimate
-            for n in range(1, self.seq_len + 1):
+            for n in range(1, self.seq_len - 1):
 
                 # pure MC
                 if t + n > self.seq_len - 1:
@@ -248,17 +250,25 @@ class COMA():
 
         sum_loss = 0.
 
-        for t in range(self.seq_len-3, -1, -1):
+        # by moving backwards except for the last transition, compute targets and update critic
+        for t in range(self.seq_len-2, -1, -1):
 
             # vector of powers of lambda
-            weights = np.fromfunction(lambda i: lam ** i, shape=(self.seq_len - t,))
+            weights = np.fromfunction(lambda i: lam ** i, shape=(self.seq_len -1 - t,))
 
             # normalize
             weights = weights / np.sum(weights)
 
             print('t', t)
-            # n=1 1 step TD
-            targets[:, t] = torch.from_numpy(G[:, t, 1:self.seq_len-t+1].dot(weights))
+            targets[:, t] = torch.from_numpy(G[:, t, 1:self.seq_len - t].dot(weights))
+
+            # if using soft actor critic, compute the joint action dist for the next time step
+            if self.flags["SAC"]:
+                joint_action_dist = 1
+                for a in range(self.n_agents):
+                    joint_action_dist *= torch.log(self.agents[a].get_action_dist(self.actor_input_pl[a][:, t+1, :], eps=0))
+                targets[:, t] += self.alpha*joint_action_dist
+
             print('target', targets[0, t])
             pred = self.critic.forward(self.joint_action_state_pl[:, t]).squeeze()
             print('pred', pred[0])
