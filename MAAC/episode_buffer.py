@@ -70,24 +70,23 @@ class Buffer():
         indicies = np.random.choice(np.arange(buffer_length), size=num_samples_per_env, replace=True).tolist()
         
         # batches to return
-        curr_agent_obs_batch = torch.zeros(self.parallel_envs, num_samples_per_env, self.n_agents, self.agent_obs_size)
-        next_agent_obs_batch = torch.zeros(self.parallel_envs, num_samples_per_env, self.n_agents, self.agent_obs_size)
-        action_batch = torch.zeros(self.parallel_envs, num_samples_per_env, self.n_agents, self.action_size)
-        reward_batch = torch.zeros(self.parallel_envs, num_samples_per_env, 1)
+        curr_agent_obs_batch = torch.zeros(batch_size, self.n_agents, self.agent_obs_size)
+        next_agent_obs_batch = torch.zeros(batch_size, self.n_agents, self.agent_obs_size)
+        action_batch = torch.zeros(batch_size, self.n_agents, self.action_size)
+        reward_batch = torch.zeros(batch_size, 1)
         
         # populate the batches
         for l in range(self.parallel_envs):
             for j in range(len(indicies)):
-                curr_agent_obs_batch[l,j,:,:] = self.curr_agent_observations[l][indicies[j]]
-                next_agent_obs_batch[l,j,:,:] = self.next_agent_observations[l][indicies[j]]
-                action_batch[l,j,:,:] = self.actions[l][indicies[j]]
-                reward_batch[l,j,:] = self.rewards[l][indicies[j]]
+                curr_agent_obs_batch[l*j,:,:] = self.curr_agent_observations[l][indicies[j]]
+                next_agent_obs_batch[l*j,:,:] = self.next_agent_observations[l][indicies[j]]
+                action_batch[l*j,:,:] = self.actions[l][indicies[j]]
+                reward_batch[l*j,:] = self.rewards[l][indicies[j]]
             
         # reshape them to be correct dimensions
-        curr_agent_obs_batch = curr_agent_obs_batch.view(self.n_agents, batch_size, -1)
-        next_agent_obs_batch = next_agent_obs_batch.view(self.n_agents, batch_size, -1)
-        action_batch = action_batch.view(self.n_agents, batch_size, -1)
-        reward_batch = reward_batch.view(batch_size, 1)
+        curr_agent_obs_batch = curr_agent_obs_batch.permute(1,0,2)
+        next_agent_obs_batch = next_agent_obs_batch.permute(1,0,2)
+        action_batch = action_batch.permute(1,0,2)
 
         return curr_agent_obs_batch, next_agent_obs_batch, action_batch, reward_batch
 

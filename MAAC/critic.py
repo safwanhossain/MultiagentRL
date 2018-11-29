@@ -1,4 +1,3 @@
-
 #!/usr/bin/python3
 
 import torch
@@ -93,42 +92,38 @@ class Global_Critic(nn.Module):
             combined = torch.cat([observation_vector[i], action_vector[i]], dim=1)
             ei_s.append(self.g_functions[i](combined))
             si_s.append(self.state_only_embeddings[i](observation_vector[i]))
-        
-        xi_s = []
+
+        all_queries = [[self.Wq_layers[l](ei_s[i]) for i in range(self.num_agents)] for l in range(self.attention_heads)]
+        all_keys = [[self.Wk_layers[l](ei_s[i]) for i in range(self.num_agents)] for l in range(self.attention_heads)]
+        all_values = [[torch.nn.functional.leaky_relu(self.V_layers[l](ei_s[i])) \
+            for i in range(self.num_agents)] for l in range(self.attention_heads)]
+
+        xi_s = [[] for _ in range(self.num_agents)]
         all_attend_logits = [[] for _ in range(self.num_agents)]
-        
-        for i in range(self.num_agents):    # for each x_i
-            to_concat = []
-            for l in range(self.attention_heads):             # for each of the multiple attention heads
-                query = self.Wq_layers[l](ei_s[i])
-                total = torch.zeros(batch_size, self.attend_dim) 
-                if self.gpu:
-                    total = total.cuda() 
+        for i in range(self.attention_heads):
+            head_queries = all_queries[i]
+            head_keys = all_keys[i]
+            head_values = all_values[i]
+            
+            for j in range(self.num_agents):
+                query = head_queries[j]
+                keys = [k for l, k in enumerate(head_keys) if l != j]
+                values = [v for l, v in enumerate(head_values) if l != j]
+
+                # calculate attention across agents
+                attend_logits = torch.matmul(query.view(query.shape[0], 1, -1),
+                                             torch.stack(keys).permute(1, 2, 0))
+                all_attend_logits[j].append(attend_logits)
                 
-                attend_logits_tensor = torch.zeros((2, batch_size, 1))
-                for j in range(self.num_agents):
-                    index = 0
-                    if i != j:
-                        key = self.Wk_layers[l](ei_s[j])
-                        alpha_j = torch.bmm(key.view(batch_size, 1, self.attend_dim), \
-                                query.view(batch_size, self.attend_dim, 1)).view(-1,1)
-                        attend_logits_tensor[index,:,:] = alpha_j
-                        alpha_j = torch.nn.functional.softmax(alpha_j / np.sqrt(key.shape[1]))
-                        assert(alpha_j.shape == (batch_size,1))
-                        v_j = torch.nn.functional.leaky_relu(self.V_layers[l](ei_s[j]))
-                        total += torch.mul(alpha_j,v_j)
-                        index += 1
-                assert(total.shape == (batch_size, self.attend_dim))
-                all_attend_logits[i].append(attend_logits_tensor.view(batch_size, 1, 2))
-                to_concat.append(total)
-            xi = torch.cat(to_concat, dim=1)
-            assert(xi.shape == (batch_size, self.embedding_dim))
-            xi_s.append(xi)
+                scaled_attend_logits = attend_logits / np.sqrt(keys[0].shape[1])
+                alpha = torch.nn.functional.softmax(scaled_attend_logits, dim=2)
+                x_i = (torch.stack(values).permute(1,2,0)*alpha).sum(dim=2)
+                xi_s[j].append(x_i)
         
         all_action_q_for_agent = torch.zeros(self.num_agents, batch_size, self.action_size)
         curr_action_q_for_agent = torch.zeros(self.num_agents, batch_size, 1)
         for i in range(self.num_agents):
-            all_action_q = self.f_functions[i](torch.cat([xi_s[i], si_s[i]], dim=1))
+            all_action_q = self.f_functions[i](torch.cat([*xi_s[i], si_s[i]], dim=1))
             all_action_q_for_agent[i,:,:] = all_action_q
 
             action_ids = action_vector[i].max(dim=1, keepdim=True)[1]
@@ -160,7 +155,7 @@ def unit_test():
     obs_vector = torch.randn((agents, batch_size, obs_size))
     action_vector = torch.randn((agents, batch_size, act_size))
 
-    output = critic.forward(obs_vector, action_vector)
+    output = critic.forward(obs_vector, action_vector)[0]
     assert(output.shape == (agents,batch_size,1))
     print("PASSED")
     
@@ -246,8 +241,8 @@ def test_critic():
             action = action.view(num_agents, batch_size, action_size)
             next_action = action.view(num_agents, batch_size, action_size)
             
-            critic_values = critic(obs.cuda(), action.cuda())
-            target_values = target_critic(next_obs.cuda(), next_action.cuda()).detach()
+            critic_values = critic(obs.cuda(), action.cuda())[0]
+            target_values = target_critic(next_obs.cuda(), next_action.cuda())[0]
 
             # compute the critic loss
             critic_loss = 0
