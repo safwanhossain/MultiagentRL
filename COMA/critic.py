@@ -16,7 +16,7 @@ class Critic(nn.Module):
     input is joint state, joint action
     outputs the Q-value for that state-action pair
     """
-    def __init__(self, input_size, hidden_size, n_layers, device):
+    def __init__(self, input_size, hidden_size, n_layers, num_agents, device):
         """
         :param input_size: size of input
         :param hidden_size: number of hidden units in layer
@@ -26,6 +26,7 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
         self.input_size = input_size
         self.device = device
+        self.num_agents = num_agents
 
         self.layers = [nn.Linear(self.input_size, hidden_size), nn.ReLU()]
 

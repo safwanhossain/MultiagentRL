@@ -46,7 +46,7 @@ class GRUActor(nn.Module):
         logits = self.linear(output)
 
         # compute eps-bounded softmax
-        softmax = nn.functional.softmax(logits, dim=2)
+        softmax = nn.functional.softmax(logits, dim=-1)
         return (1 - eps) * softmax + eps / self.action_size
 
 class MLPActor(nn.Module):
@@ -83,7 +83,7 @@ class MLPActor(nn.Module):
         logits = self.mlp(input)
 
         # compute eps-bounded softmax
-        softmax = nn.functional.softmax(logits, dim=2)
+        softmax = nn.functional.softmax(logits, dim=-1)
         return (1 - eps) * softmax + eps / self.action_size
 
 def unit_test():

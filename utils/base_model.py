@@ -89,8 +89,8 @@ class BaseModel:
 
             count += self.seq_len
 
-        # print("Mean reward for this batch: {0:5.3}".format(np.mean(rewards)))
-        # return np.mean(rewards)
+        print("Mean reward for this batch: {0:5.3}".format(np.mean(rewards)))
+        return np.mean(rewards)
 
     def train(self):
         """
@@ -98,9 +98,10 @@ class BaseModel:
         """
         metrics = {}
         for e in range(self.epochs):
-            self.gather_batch(eps=max(0.01, 0.15 - e/self.epochs))
+            eps = 0 if self.SAC else max(0.01, 0.15 - 0.15*e/self.epochs)
+            metrics["Reward"] = self.gather_batch(eps=eps)
             metrics["Critic Loss"], metrics["Actor Loss"] = self.update(e)
-            metrics["Reward"] = self.evaluate()
+             # self.evaluate()
 
             self.experiment.log_multiple_metrics(metrics)
             self.experiment.set_step(e)
