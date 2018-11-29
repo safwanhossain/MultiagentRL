@@ -75,10 +75,11 @@ class MLPAgent(Agent):
         super(MLPAgent, self).__init__(actor_net)
 
     def get_action(self, actor_input, **args):
+
         eps = args['eps']
         action_dist = self.actor_net.forward(actor_input, eps)
 
-        action_idx = (torch.multinomial(action_dist[0, 0, :], num_samples=1)).numpy()
+        action_idx = (torch.multinomial(action_dist[0, 0, :], num_samples=1)).cpu().numpy()
         action = torch.zeros(self.actor_net.action_size)
         action[action_idx] = 1
         return action
@@ -96,19 +97,21 @@ class GRUActor(torch.nn.Module):
 
     ''' This network, takes in observations, and returns an action. Action space is discrete,
     '''
-    def __init__(self, input_size, h_size, action_size):
+    def __init__(self, input_size, h_size, action_size, device):
         super(GRUActor, self).__init__()
         self.input_size = input_size
         self.action_size = action_size
+        self.device = device
         self.h_size = h_size
 
         self.actor_gru = torch.nn.GRU(input_size=input_size,
                                       hidden_size=h_size,
-                                      batch_first=True)
+                                      batch_first=True).to(self.device)
 
-        self.linear = torch.nn.Linear(h_size, self.action_size)
+        self.linear = torch.nn.Linear(h_size, self.action_size).to(self.device)
 
-        self.actor_gru.apply(self.init_weights)
+        self.to(self.device)
+        #self.actor_gru.apply(self.init_weights)
         #self.linear.apply(self.init_weights)
 
     def forward(self, obs_seq, eps, h_state=None):
@@ -141,10 +144,11 @@ class GRUActor(torch.nn.Module):
 
 class MLPActor(torch.nn.Module):
 
-    def __init__(self, input_size, h_size, action_size):
+    def __init__(self, input_size, h_size, action_size, device):
         super(MLPActor, self).__init__()
         self.input_size = input_size
         self.action_size = action_size
+        self.device = device
         self.h_size = h_size
 
         self.model = torch.nn.Sequential(
@@ -152,9 +156,10 @@ class MLPActor(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Linear(h_size, h_size),
             torch.nn.ReLU(),
-            torch.nn.Linear(h_size, action_size))
+            torch.nn.Linear(h_size, action_size)).to(self.device)
 
-        self.model.apply(self.init_weights)
+        self.to(self.device)
+        #self.model.apply(self.init_weights)
 
     def forward(self, input, eps):
         """

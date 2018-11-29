@@ -16,7 +16,7 @@ class GlobalCritic(torch.nn.Module):
     input is joint state, joint action
     outputs the Q-value for that state-action pair
     """
-    def __init__(self, input_size, hidden_size, n_layers):
+    def __init__(self, input_size, hidden_size, n_layers, device):
         """
 
         :param input_size:
@@ -27,13 +27,14 @@ class GlobalCritic(torch.nn.Module):
         super(GlobalCritic, self).__init__()
         self.input_size = input_size
         self.layers = [nn.Linear(self.input_size, hidden_size), nn.ReLU()]
+        self.device = device
 
         for n in range(n_layers):
             self.layers.append(nn.Linear(hidden_size, hidden_size))
             self.layers.append(nn.ReLU())
 
         self.layers.append(nn.Linear(hidden_size, 1))
-        self.sequential = nn.Sequential(*self.layers)
+        self.sequential = nn.Sequential(*self.layers).to(device)
 
         #self.sequential.apply(self.init_weights)
 
