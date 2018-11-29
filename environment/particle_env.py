@@ -11,7 +11,7 @@ def visualize(model):
 
     for t in range(model.seq_len):
         model.env.render()
-        time.sleep(0.05)
+        time.sleep(0.1)
         # get observations
         obs_n, state, reward = model.env.step(actions)
 

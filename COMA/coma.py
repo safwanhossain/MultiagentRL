@@ -2,6 +2,7 @@
 from utils.base_model import BaseModel
 from actors import GRUActor, MLPActor
 from environment.particle_env import make_env, visualize
+from critic_maac import Critic as MAAC_Critic
 from critic import Critic
 import numpy as np
 
@@ -22,7 +23,7 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
 class COMA(BaseModel):
 
     def __init__(self, env, critic_arch, policy_arch, batch_size, seq_len, discount, lam,
-                 lr_critic=0.0005, lr_actor=0.0002, use_gpu=True):
+                 lr_critic=0.0001, lr_actor=0.0001, use_gpu=True):
         """
         Initialize all aspects of the model
         :param env: Environment model will be used in
@@ -33,6 +34,7 @@ class COMA(BaseModel):
         :param h_size: size of GRU state
         """
         super(COMA, self).__init__(use_gpu=use_gpu)
+        self.model = "coma"
         self.batch_size = batch_size
         self.seq_len = seq_len
         self.discount = discount
@@ -41,10 +43,11 @@ class COMA(BaseModel):
         self.action_size = env.action_size
         self.obs_size = env.agent_obs_size
         self.state_size = env.global_state_size
+        self.alpha = 0.2
         self.env = env
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
-        self.epochs = 1500
+        self.epochs = 500
         self.num_updates = 1
         self.num_entries_per_update = self.batch_size * self.seq_len
 
@@ -65,6 +68,9 @@ class COMA(BaseModel):
             [torch.zeros((batch_size, seq_len, self.obs_size+self.action_size+self.n_agents)).to(self.device)
             for _ in range(self.n_agents)]
 
+        self.observations = torch.zeros(self.n_agents, self.batch_size, self.seq_len, self.obs_size).to(self.device)
+        self.actions = torch.zeros(self.n_agents, self.batch_size, self.seq_len, self.action_size).to(self.device)
+
         # sequence of immediate rewards
         self.reward_seq_pl = np.zeros((batch_size, seq_len))
 
@@ -79,20 +85,37 @@ class COMA(BaseModel):
                                n_agents = self.n_agents)
         self.actor_optimizer = torch.optim.RMSprop(self.actor.parameters(), lr=self.lr_actor, eps=1e-08)
 
-        self.critic = Critic(input_size=self.action_size*(self.n_agents) + self.state_size,
-                             hidden_size=critic_arch['h_size'],
-                             device=self.device,
-                             n_layers=critic_arch['n_layers'])
+        if self.model == "maac":
+            self.critic = MAAC_Critic(observation_size=self.obs_size, action_size=self.action_size,
+                                      num_agents=self.n_agents, attention_heads=4, embedding_dim=128, device=self.device)
+
+            self.target_critic = MAAC_Critic(observation_size=self.obs_size, action_size=self.action_size,
+                                      num_agents=self.n_agents, attention_heads=4, embedding_dim=128, device=self.device)
+
+        elif self.model == "coma":
+            self.critic = Critic(input_size=self.action_size * (self.n_agents) + self.state_size,
+                                  hidden_size=critic_arch['h_size'],
+                                  device=self.device,
+                                  n_layers=critic_arch['n_layers'])
+
+            self.target_critic = Critic(input_size=self.action_size*(self.n_agents) + self.state_size,
+                                        hidden_size=critic_arch['h_size'],
+                                        n_layers=critic_arch['n_layers'],
+                                        device=self.device)
+
         self.critic_optimizer = torch.optim.RMSprop(self.critic.parameters(), lr=self.lr_critic, eps=1e-08)
 
-        self.target_critic = Critic(input_size=self.action_size*(self.n_agents) + self.state_size,
-                                    hidden_size=critic_arch['h_size'],
-                                    n_layers=critic_arch['n_layers'],
-                                    device=self.device)
         self.params["lam"] = self.lam
         self.set_params()
         self.experiment.log_multiple_params(self.policy_arch)
         self.experiment.log_multiple_params(self.critic_arch)
+
+    def get_critic_input(self, t=None):
+        if t is None:
+            return self.joint_action_state_pl if self.model == "coma" else (self.observations, self.actions)
+        else:
+            return self.joint_action_state_pl[:, t] if self.model == "coma" else \
+                  (self.observations[:, :, t:t + 1, :], self.actions[:, :, t:t + 1, :])
 
     def update_target_network(self):
         """
@@ -112,53 +135,71 @@ class COMA(BaseModel):
         # first get the Q value for the joint actions
         # print('q input', self.joint_action_state_pl[0, :, :])
 
-        q_vals = self.critic.forward(self.joint_action_state_pl)
+        q_vals = self.critic.forward(self.get_critic_input()).detach()
 
         # print("q_vals", q_vals)
-
-        diff_actions = torch.zeros_like(self.joint_action_state_pl).to(self.device)
+        diff_action_in = self.joint_action_state_pl if self.model == "coma" else self.actions
+        diff_actions = torch.zeros_like(diff_action_in).to(self.device)
 
         # initialize the advantage for each agent, by copying the Q values
-        advantage = [q_vals.clone().detach() for a in range(self.n_agents)]
+        if self.model == "coma":
+            advantage = [q_vals.clone().detach() for a in range(self.n_agents)]
+        elif self.model == "maac":
+            advantage = [q_vals[a].clone().detach() for a in range(self.n_agents)]
 
         # Optimizer
         self.actor_optimizer.zero_grad()
 
         sum_loss = 0.0
+        EPS = 1.0e-08
 
         # computing baselines, by broadcasting across rollouts and time-steps
         for a in range(self.n_agents):
             # get the dist over actions, based on each agent's observation, use the same epsilon during fitting?
-            action_dist = self.actor(self.actor_input_pl[a], a, eps=0)
+            pi = self.actor(self.actor_input_pl[a], a, eps=0)
+            log_pi = torch.log(pi + EPS)
 
             # make a copy of the joint-action, state, to substitute different actions in it
-            diff_actions.copy_(self.joint_action_state_pl)
+            diff_actions.copy_(diff_action_in)
 
             # get the chosen action for each agent
             action_index = a * self.action_size
             chosen_action = self.joint_action_state_pl[:, :, action_index:action_index+self.action_size]
 
             # compute the baseline for that agent, by substituting different actions in the joint action
+            # if self.model == "maac":
             for u in range(self.action_size):
                 action = torch.zeros(self.action_size)
                 action[u] = 1
 
                 # index into that agent's action to substitute a different one
-                diff_actions[:, :, action_index:action_index+self.action_size] = action
+                if self.model == "coma":
+                    diff_actions[:, :, action_index:action_index+self.action_size] = action
+                elif self.model == "maac":
+                    diff_actions[a, :, :, :] = action
 
                 # get the Q value of that new joint action
-                Q_u = self.critic.forward(diff_actions)
+                # Q_u = self.critic.forward(self.joint_action_state_pl)
+                Q_u = self.critic(self.get_critic_input())
 
-                advantage[a] -= Q_u*action_dist[:, :, u].unsqueeze_(-1)
+                if self.model == "maac":
+                    Q_u = Q_u[a]
+
+                advantage[a] -= Q_u*pi[:, :, u].unsqueeze_(-1)
+
+            # elif self.model == "maac":
+            #     maac_baseline = (all_q[a].to(self.device) * pi.to(self.device)).sum(dim=-1, keepdim=True)
+            #     advantage[a] = q_vals[a] - maac_baseline
+                # advantage[a] = (advantage[a] - advantage[a].mean()) / advantage[a].std()  # make it 0 mean and 1 var (idk why??)
 
             # loss is negative log of probability of chosen action, scaled by the advantage
             # the advantage is treated as a scalar, so the gradient is computed only for log prob
             advantage[a] = advantage[a].detach()
-            EPS = 1.0e-08
+
             # print('advantage', advantage[a].squeeze().size(), 'chosen_action', chosen_action.size())
 
             # sum along the action dim, left with log loss for chosen action
-            loss = -torch.sum(torch.log(action_dist + EPS)*chosen_action, dim=-1)
+            loss = -torch.sum(log_pi*chosen_action, dim=-1)
             loss *= advantage[a].squeeze()
 
             # print('a', a, 'action_dist', (action_dist[0, 0, :] + EPS))
@@ -186,13 +227,14 @@ class COMA(BaseModel):
         lam = self.lam
 
         # first compute the future discounted return at every step using the sequence of rewards
-        G = np.zeros((self.batch_size, self.seq_len, self.seq_len + 1))
+        G = np.zeros((self.n_agents, self.batch_size, self.seq_len, self.seq_len + 1))
 
         # initialize the first column with estimates from the target Q network
-        predictions = self.target_critic(self.joint_action_state_pl).squeeze()
+        # predictions = self.target_critic(self.joint_action_state_pl).squeeze()
+        predictions = self.target_critic.forward(self.get_critic_input()).squeeze()
 
         # use detach to assign to numpy array
-        G[:, :, 0] = predictions.detach().cpu().numpy()
+        G[:, :, :, 0] = predictions.detach().cpu().numpy()
 
         # by moving backwards, construct the G matrix
         for t in range(self.seq_len - 1, -1, -1):
@@ -202,15 +244,15 @@ class COMA(BaseModel):
 
                 # pure MC
                 if t + n > self.seq_len - 1:
-                    G[:, t, n] = self.reward_seq_pl[:, t:].dot(np.fromfunction(lambda i: self.discount**i,
+                    G[:,:, t, n] = self.reward_seq_pl[:, t:].dot(np.fromfunction(lambda i: self.discount**i,
                                                                                  shape=(self.seq_len-t,)))
 
                 # combination of MC + bootstrapping
                 else:
-                    G[:, t, n] = self.reward_seq_pl[:, t] + self.discount*G[:, t+1, n-1]
+                    G[:,:, t, n] = self.reward_seq_pl[:, t] + self.discount*G[:,:, t+1, n-1]
 
         # compute target at timestep t
-        targets = torch.zeros((self.batch_size, self.seq_len), dtype=torch.float32).to(self.device)
+        targets = torch.zeros((self.n_agents, self.batch_size, self.seq_len), dtype=torch.float32).to(self.device)
 
         sum_loss = 0.0
 
@@ -223,12 +265,12 @@ class COMA(BaseModel):
             weights = weights / np.sum(weights)
 
             # print('t', t)
-            targets[:, t] = torch.from_numpy(G[:, t, 1:self.seq_len-t+1].dot(weights)).to(self.device)
+            targets[:, :, t] = torch.from_numpy(G[:, :, t, 1:self.seq_len-t+1].dot(weights)).to(self.device)
             # print('target', targets[0, t])
-            pred = self.critic(self.joint_action_state_pl[:, t]).squeeze()
+            pred = self.critic(self.get_critic_input(t)).squeeze()
             # print('pred', pred[0])
 
-            loss = torch.mean(torch.pow(targets[:, t] - pred, 2)) / self.seq_len
+            loss = torch.mean(torch.pow(targets[:, :, t] - pred, 2)) / self.seq_len
             sum_loss += loss.item()
             # print("critic loss", sum_loss)
             # fit the Critic
@@ -246,6 +288,9 @@ class COMA(BaseModel):
 
         self.joint_action_state_pl[:, :, :self.action_size * self.n_agents] = self.buffer.actions.view(self.batch_size, self.seq_len, -1)
         self.joint_action_state_pl[:, :, self.action_size * self.n_agents:] = self.buffer.next_global_state[:, :, :]
+
+        self.observations[:, :, :, :] = self.buffer.next_agent_obs.permute(2, 0, 1, 3)
+        self.actions[:, :, :, :] = self.buffer.actions.permute(2, 0, 1, 3)
 
         for n in range(self.n_agents):
             agent_idx = torch.zeros(self.batch_size, self.seq_len, self.n_agents)
@@ -294,10 +339,14 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 128, 'n_layers':2}
 
     model = COMA(env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                batch_size=30, seq_len=100, discount=0.8, lam=0.8, lr_critic=0.0005, lr_actor=0.0001, use_gpu=False)
+                batch_size=100, seq_len=100, discount=0.8, lam=0.8, lr_critic=0.0002, lr_actor=0.00005, use_gpu=True)
 
     st = time.time()
-    model.train()
-    print("Time taken for {0:d} epochs {1:10.4f}".format(model.epochs, time.time() - st))
 
+    try:
+        model.train()
+    except KeyboardInterrupt:
+        pass
+
+    print("Time taken for {0:d} epochs {1:10.4f}".format(model.epochs, time.time() - st))
     visualize(model)
