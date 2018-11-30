@@ -6,7 +6,7 @@ import torch
 from actors import GRUActor
 from environment import marl_env
 
-""" Run the COMA training regime. Training is done in batch mode with a batch size of 30. Given the 
+""" Run the main_model training regime. Training is done in batch mode with a batch size of 30. Given the 
 small nature of the current problem, we are NOT parameter sharing between agents (will do so when 
 things start working). In each episode (similar to "epoch" in normal ML parlance), we:
     (1) collect sequences of data (batch size/n); 

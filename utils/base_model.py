@@ -68,22 +68,26 @@ class BaseModel:
             actions = torch.zeros(self.n_agents, self.env.action_size)
             actions[:, 0] = 1
             # np.random.seed()
-            curr_agent_obs, curr_global_state, reward = self.env.reset()
+            curr_agent_obs, curr_global_state, reward, _ = self.env.reset()
 
             for t in range(self.seq_len):
                 # get observations, by executing current action
                 # TODO add parallelism
-                next_agent_obs, next_global_state, reward = self.env.step(actions)
+                next_agent_obs, next_global_state, reward, end_signal = self.env.step(actions)
 
                 self.buffer.add_to_buffer(t, curr_agent_obs, next_agent_obs, curr_global_state, next_global_state,
                                            actions, reward)
                 curr_agent_obs, curr_global_state = next_agent_obs, next_global_state
                 rewards.append(reward)
 
+                if end_signal:
+                    break
+
                 # for each agent, save observation, compute next action
                 for n in range(self.n_agents):
                     pi = self.policy(curr_agent_obs[n], actions[n, :], n, eps).cpu()
                     # sample action from pi, convert to one-hot vector
+
                     action_idx = (torch.multinomial(pi, num_samples=1))
                     actions[n, :] = torch.zeros(self.action_size).scatter(0, action_idx, 1)
 

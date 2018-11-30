@@ -1,7 +1,9 @@
 #!/usr/bin/python3
+import argparse
 from utils.base_model import BaseModel
 from actors import GRUActor, MLPActor
 from environment.particle_env import make_env, visualize
+from environment.sc2_env_wrapper import SC2EnvWrapper
 from critic_maac import Critic as MAAC_Critic
 from critic import Critic
 import numpy as np
@@ -11,7 +13,7 @@ from utils.buffer import Buffer
 import torch
 import time
 
-""" Run the COMA training regime. Training is done in batch mode with a batch size of 30. Given the 
+""" Run the main_model training regime. Training is done in batch mode with a batch size of 30. Given the 
 small nature of the current problem, we are NOT parameter sharing between agents (will do so when 
 things start working). In each episode (similar to "epoch" in normal ML parlance), we:
     (1) collect sequences of data (batch size/n); 
@@ -20,10 +22,10 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
     
 """
 
-class COMA(BaseModel):
+class Model(BaseModel):
 
-    def __init__(self, env, critic_arch, policy_arch, batch_size, seq_len, discount, lam,
-                 lr_critic=0.0001, lr_actor=0.0001, use_gpu=True):
+    def __init__(self, flags, env, critic_arch, policy_arch, batch_size, seq_len, discount, lam,
+                 lr_critic=0.0001, lr_actor=0.0001):
         """
         Initialize all aspects of the model
         :param env: Environment model will be used in
@@ -33,9 +35,11 @@ class COMA(BaseModel):
         :param lam: for TD(lambda) return
         :param h_size: size of GRU state
         """
-        super(COMA, self).__init__(use_gpu=use_gpu)
-        self.model = "coma"
-        self.SAC = True
+        use_gpu = flags.gpu.lower() in ["true", "t", "yes", "y"]
+        track_results = flags.track_results.lower() in ["true", "t", "yes", "y"]
+        super(Model, self).__init__(use_gpu=use_gpu, track_results=track_results)
+        self.use_maac = flags.maac.lower() in ["true", "t", "yes", "y"]
+        self.SAC = flags.SAC.lower() in ["true", "t", "yes", "y"]
         self.batch_size = batch_size
         self.seq_len = seq_len
         self.discount = discount
@@ -48,7 +52,7 @@ class COMA(BaseModel):
         self.env = env
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
-        self.epochs = 500
+        self.epochs = 1500
         self.num_updates = 1
         self.num_entries_per_update = self.batch_size * self.seq_len
 
@@ -86,14 +90,14 @@ class COMA(BaseModel):
                                n_agents = self.n_agents)
         self.actor_optimizer = torch.optim.RMSprop(self.actor.parameters(), lr=self.lr_actor, eps=1e-08)
 
-        if self.model == "maac":
+        if self.use_maac:
             self.critic = MAAC_Critic(observation_size=self.obs_size, action_size=self.action_size,
                                       num_agents=self.n_agents, attention_heads=4, embedding_dim=128, device=self.device)
 
             self.target_critic = MAAC_Critic(observation_size=self.obs_size, action_size=self.action_size,
                                       num_agents=self.n_agents, attention_heads=4, embedding_dim=128, device=self.device)
 
-        elif self.model == "coma":
+        else:
             self.critic = Critic(input_size=self.action_size * (self.n_agents) + self.state_size,
                                   hidden_size=critic_arch['h_size'],
                                   device=self.device,
@@ -115,10 +119,11 @@ class COMA(BaseModel):
 
     def get_critic_input(self, t=None):
         if t is None:
-            return self.joint_action_state_pl if self.model == "coma" else (self.observations, self.actions)
+            return (self.observations, self.actions) if self.use_maac else self.joint_action_state_pl
         else:
-            return self.joint_action_state_pl[:, t] if self.model == "coma" else \
-                  (self.observations[:, :, t:t + 1, :], self.actions[:, :, t:t + 1, :])
+            return (self.observations[:, :, t:t + 1, :], self.actions[:, :, t:t + 1, :]) if self.use_maac else \
+                   self.joint_action_state_pl[:, t]
+
 
     def update_target_network(self):
         """
@@ -141,14 +146,15 @@ class COMA(BaseModel):
         q_vals = self.critic.forward(self.get_critic_input()).detach()
 
         # print("q_vals", q_vals)
-        diff_action_in = self.joint_action_state_pl if self.model == "coma" else self.actions
+        diff_action_in = self.actions if self.use_maac else self.joint_action_state_pl
         diff_actions = torch.zeros_like(diff_action_in).to(self.device)
 
         # initialize the advantage for each agent, by copying the Q values
-        if self.model == "coma":
-            advantage = [q_vals.clone().detach() for a in range(self.n_agents)]
-        elif self.model == "maac":
+        if self.use_maac:
             advantage = [q_vals[a].clone().detach() for a in range(self.n_agents)]
+        else:
+            advantage = [q_vals.clone().detach() for a in range(self.n_agents)]
+
 
         # Optimizer
         self.actor_optimizer.zero_grad()
@@ -160,7 +166,6 @@ class COMA(BaseModel):
         for a in range(self.n_agents):
             # get the dist over actions, based on each agent's observation, use the same epsilon during fitting?
             pi = self.actor(self.actor_input_pl[a], a, eps=0)
-            log_pi = torch.log(pi + EPS)
 
             # make a copy of the joint-action, state, to substitute different actions in it
             diff_actions.copy_(diff_action_in)
@@ -170,50 +175,44 @@ class COMA(BaseModel):
             chosen_action = self.joint_action_state_pl[:, :, action_index:action_index+self.action_size]
 
             # compute the baseline for that agent, by substituting different actions in the joint action
-            # if self.model == "maac":
             for u in range(self.action_size):
                 action = torch.zeros(self.action_size)
                 action[u] = 1
 
                 # index into that agent's action to substitute a different one
-                if self.model == "coma":
-                    diff_actions[:, :, action_index:action_index+self.action_size] = action
-                    critic_in = diff_actions
-                elif self.model == "maac":
+                if self.use_maac:
                     diff_actions[a, :, :, :] = action
                     critic_in = (self.observations, diff_actions)
+                else:
+                    diff_actions[:, :, action_index:action_index+self.action_size] = action
+                    critic_in = diff_actions
+
 
                 # get the Q value of that new joint action
                 # Q_u = self.critic.forward(self.joint_action_state_pl)
                 Q_u = self.critic(critic_in)
 
-                if self.model == "maac":
+                if self.use_maac:
                     Q_u = Q_u[a]
 
                 advantage[a] -= Q_u*pi[:, :, u].unsqueeze_(-1)
 
-            # elif self.model == "maac":
+            # elif self.use_maac:
             #     maac_baseline = (all_q[a].to(self.device) * pi.to(self.device)).sum(dim=-1, keepdim=True)
             #     advantage[a] = q_vals[a] - maac_baseline
                 # advantage[a] = (advantage[a] - advantage[a].mean()) / advantage[a].std()  # make it 0 mean and 1 var (idk why??)
 
             if self.SAC:
-                entropy = torch.sum(log_pi * pi, dim=-1).unsqueeze_(-1)
+                entropy = torch.sum(torch.log(pi) * pi, dim=-1).unsqueeze_(-1)
                 advantage[a] -= self.alpha * entropy
 
             # loss is negative log of probability of chosen action, scaled by the advantage
             # the advantage is treated as a scalar, so the gradient is computed only for log prob
             advantage[a] = advantage[a].detach()
 
-            # print('advantage', advantage[a].squeeze().size(), 'chosen_action', chosen_action.size())
-
             # sum along the action dim, left with log loss for chosen action
-            loss = -torch.sum(log_pi*chosen_action, dim=-1)
+            loss = -torch.sum(torch.log(pi)*chosen_action, dim=-1)
             loss *= advantage[a].squeeze()
-
-            # print('a', a, 'action_dist', (action_dist[0, 0, :] + EPS))
-            # print('action_dist', action_dist)
-            # print('advantage', torch.mean(advantage[a]))
 
             sum_loss += torch.mean(loss).item()
 
@@ -305,10 +304,11 @@ class COMA(BaseModel):
 
         sum_loss = 0.0
 
-        for t in range(self.seq_len - 3, -1, -1):
+        # by moving backwards except for the last transition, compute targets and update critic
+        for t in range(self.seq_len - 2, -1, -1):
 
             # vector of powers of lambda
-            weights = np.fromfunction(lambda i: lam ** i, shape=(self.seq_len -1 - t,))
+            weights = np.fromfunction(lambda i: lam ** i, shape=(self.seq_len - 1 - t,))
 
             # normalize
             weights = weights / np.sum(weights)
@@ -389,13 +389,36 @@ class COMA(BaseModel):
 
 
 if __name__ == "__main__":
-    env = make_env(n_agents=2)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--gpu', default='True',
+                        help='use GPU if True, CPU if False [default: True]')
+    parser.add_argument('--maac', default='True',
+                        help='Whether to use maac critic or not [default: True]')
+    parser.add_argument('--SAC', default='True',
+                        help='Whether to use SAC or not [default: True]')
+    parser.add_argument('--track_results', default='True',
+                        help='Whether to track results on comet or not [default: True]')
+    parser.add_argument('--num_agents', type=int, default=2,
+                        help='Number of agents in particle environment [default: 2]')
+    parser.add_argument('--env', default="particle",
+                        help='Environment to run ("sc2" or "particle" [default: particle]')
+
+    flags = parser.parse_args()
+
+
+    if flags.env == "particle":
+        env = make_env(n_agents=flags.num_agents)
+    elif flags.env == "sc2":
+        env = SC2EnvWrapper("CollectMineralShards")
+    else:
+        raise TypeError("Requested environment does not exist or is not implemented yet")
 
     policy_arch = {'type': MLPActor, 'h_size': 128}
     critic_arch = {'h_size': 128, 'n_layers':2}
 
-    model = COMA(env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                batch_size=50, seq_len=100, discount=0.8, lam=0.8, lr_critic=0.0002, lr_actor=0.0001, use_gpu=True)
+    model = Model(flags, env=env, critic_arch=critic_arch, policy_arch=policy_arch,
+                  batch_size=30, seq_len=80, discount=0.8, lam=0.8, lr_critic=0.0002, lr_actor=0.0001)
 
     st = time.time()
 
