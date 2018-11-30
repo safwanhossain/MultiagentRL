@@ -32,7 +32,8 @@ class COMA(BaseModel):
         :param state_size: size of global state
         :param h_size: size of GRU state
         """
-        super(COMA, self).__init__()
+        self.gpu_mode = True
+        super(COMA, self).__init__(use_gpu=self.gpu_mode)
         self.batch_size = batch_size
         self.seq_len = seq_len
         self.discount = discount
@@ -47,7 +48,6 @@ class COMA(BaseModel):
         self.alpha = alpha
         self.metrics = {}
         self.set_flags(**kwargs)
-        self.gpu_mode = True
 
         self.critic_arch = critic_arch
         self.policy_arch = policy_arch
@@ -148,6 +148,19 @@ class COMA(BaseModel):
         # whether to allow agents access to the global state
         #self.PARTIAL_OBS = kwargs['PARTIAL_OBS']
 
+    def load_model(self, path, set_eval=True):
+
+        self.actor = torch.load(path+"_actor.pt")
+        self.critic = torch.load(path+"_critic")
+
+        # if set_eval:
+        #     self.critic.eval()
+        #     self.actor.eval()
+
+    def save_model(self):
+
+        torch.save(self.critic.state_dict(), "saved_models/" + self.experiment.get_key() + "_critic")
+        torch.save(self.actor.state_dict(), 'saved_models/' + self.experiment.get_key() + "_actor.pt")
 
     def reset_agents(self):
         for agent in self.agents:
@@ -230,9 +243,9 @@ class COMA(BaseModel):
             loss = -torch.sum(torch.log(action_dist + EPS)*chosen_action, dim=-1)
             loss *= advantage[a].squeeze()
 
-            print('a', a, 'action_dist', (action_dist[0, 0, :] + EPS))
+            #print('a', a, 'action_dist', (action_dist[0, 0, :] + EPS))
             # print('action_dist', action_dist)
-            print('advantage', torch.mean(advantage[a]))
+            #print('advantage', torch.mean(advantage[a]))
 
             sum_loss += torch.mean(loss).item()
 
@@ -374,45 +387,5 @@ class COMA(BaseModel):
 
         return critic_loss, actor_loss
 
-def unit_test():
-    n_agents = 3
-    n_landmarks = 3
 
-    test_coma = COMA(env=env, batch_size=1, seq_len=30, discount=0.9, n_agents=3, action_size=5, obs_size=14, state_size=18, h_size=16)
-    test_coma.gather_rollouts(eps=0.05)
-    print(test_coma.actor_input_pl[0].shape)
-    print(test_coma.reward_seq_pl.shape)
-    print(test_coma.joint_action_pl.shape)
-    print(test_coma.global_state_pl.shape)
-    print(test_coma.global_state_pl[0, 1, :])
-    print(test_coma.joint_action_state_pl[0, 1, :])
-
-    for e in range(20):
-        test_coma.fit_actor(eps=0.05)
-
-    # for e in range(20):
-    #     test_coma.fit_critic(lam=0.5)
-
-if __name__ == "__main__":
-
-        env = marl_env.make_env('simple_spread')
-
-        """
-        5 possible actions (NOOP, LEFT, RIGHT, UP, DOWN)
-    
-        Observation space:
-        Agent’s own velocity 2D
-        Agent’s own position 2D
-        Landmark positions with respect to the agent 3*2D
-        The positions of other agents with respect to the agent 2*2D
-        The messages C from other agents 2*2D messages (DISCARD)
-        
-        Note: Agents have access to almost everything about the global state except for other agent's 
-        velocity. The GRU cell is still useful to model where other agents are going '''
-        """
-
-        # global state consists of agent positions and velocity (2D) + landmark positions
-        # state_size = n_agents*4 + n_landmarks*2
-
-        unit_test()
 

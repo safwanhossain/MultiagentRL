@@ -32,8 +32,8 @@ def gather_rollouts(coma, eps):
             # get observations, by executing current joint action
             obs_n, reward_n, done_n, info_n = coma.env.step(joint_action)
 
-            # they all get the same reward, save the reward, divided by number of agents, to prevent large rewards and to compare with single agent experiments
-            coma.reward_seq_pl[i, t] = reward_n[0] / coma.n_agents
+            # they all get the same reward, save the reward
+            coma.reward_seq_pl[i, t] = reward_n[0]
 
             # for each agent, save observation, compute next action
             for n in range(coma.n_agents):
@@ -123,51 +123,12 @@ if __name__ == "__main__":
     PARTIAL_OBS = True
 
     coma = COMA(env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                batch_size=60, seq_len=100, discount=0.8, lam=0.8, n_agents=n, action_size=5, obs_size=obs_size,
+                batch_size=30, seq_len=80, discount=0.8, lam=0.8, n_agents=n, action_size=5, obs_size=obs_size,
                      state_size=state_size, lr_critic=0.0002, lr_actor=0.0001, SAC=SAC, TD_LAMBDA=TD_LAMDA)
 
-    coma.train(4000)
-    # experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name="COMA", \
-    #                             auto_param_logging=False, auto_metric_logging=False,
-    #                             log_graph=False, log_env_details=False, parse_args=False,
-    #                             auto_output_logging=False)
-    #
-    # experiment.log_multiple_params(coma.params)
-    # experiment.log_multiple_params(coma.policy_arch)
-    # experiment.log_multiple_params(coma.critic_arch)
-
-    # if not SAC:
-    #     eps = 0.15
-    #
-    # else:
-    #     eps = 0
-    # # visualize(coma)
-    # try:
-    #     for e in range(4000):
-    #         if e % 1 == 0:
-    #             print('e', e)
-    #             coma.update_target()
-    #
-    #         coma.gather_rollouts(coma, eps=eps - e*eps/4000)
-    #
-    #         critic_loss = coma.fit_critic()
-    #         print("loss", critic_loss)
-    #
-    #         coma.fit_actor()
-    #
-    #         experiment.set_step(e)
-    #         experiment.log_multiple_metrics(coma.metrics)
-    #
-    # except KeyboardInterrupt:
-    #     visualize(coma)
-    #     pass
-    #
+    # coma.actor = torch.load("saved_models/_actor.pt")
     # visualize(coma)
-    # torch.save(coma.critic.state_dict(), "COMA/critic2.pt")
-    # torch.save(coma.actor.state_dict(), 'COMA/actor2.pt')
-    # finally:
-    #     plt.plot(coma.metrics['mean_reward'], 'b')
-    #     plt.plot(coma.metrics['mean_actor_loss'], 'g')
-    #     plt.plot(coma.metrics['mean_critic_loss'], 'r')
-    #     plt.show()
-#     visualize(coma)
+    coma.train(4000)
+
+
+
