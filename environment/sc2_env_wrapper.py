@@ -31,6 +31,11 @@ class SC2EnvWrapper:
         }
     }
 
+    unit_type_mapping = {
+        48: 1,
+        1680: 2
+    }
+
     def __init__(self, map, step_mul=None, visualize=False):
         """
         :param map[string]: map to use
@@ -102,7 +107,12 @@ class SC2EnvWrapper:
                 gi = global_idx_other
                 global_idx_other += 1
 
-            global_observations[gi] = [unit.unit_type,
+            ut = SC2EnvWrapper.unit_type_mapping.get(unit.unit_type)
+            if ut is None:
+                print("unit type mapping not found. Create unit mapping for unit type", unit.unit_type)
+                raise TypeError
+
+            global_observations[gi] = [ut,
                                        unit.x,
                                        unit.y,
                                        unit.health,
@@ -135,14 +145,24 @@ class SC2EnvWrapper:
                     obs_idx = obs_self_idx
                     obs_self_idx += 1
 
-                agent_obs[obs_idx] = [other_unit.unit_type,
+                ut = SC2EnvWrapper.unit_type_mapping.get(other_unit.unit_type)
+                if ut is None:
+                    print("unit type mapping not found. Create unit mapping for unit type", other_unit.unit_type)
+                    raise TypeError
+
+                agent_obs[obs_idx] = [ut,
                                       xy_distances[unit_idx][0],
                                       xy_distances[unit_idx][1],
                                       distances[unit_idx],
                                       other_unit.health,
                                       other_unit.shield]
 
+            agent_obs -=  np.mean(agent_obs, axis=0, keepdims=True)
+            agent_obs /= (np.std(agent_obs, axis=0, keepdims=True) + 1e-8)
             agent_observations[global_idx_self - 1] = agent_obs.flatten()
+
+        global_observations -= np.mean(global_observations, axis=0, keepdims=True)
+        global_observations /= (np.std(global_observations, axis=0, keepdims=True) + 1e-8)
 
         self.global_obs, self.agent_obs = global_observations, agent_observations
 

@@ -48,11 +48,11 @@ class Model(BaseModel):
         self.action_size = env.action_size
         self.obs_size = env.agent_obs_size
         self.state_size = env.global_state_size
-        self.alpha = 0.1
+        self.alpha = 0.2
         self.env = env
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
-        self.epochs = 1500
+        self.epochs = 10000
         self.num_updates = 1
         self.num_entries_per_update = self.batch_size * self.seq_len
 
@@ -399,8 +399,8 @@ if __name__ == "__main__":
                         help='Whether to use SAC or not [default: True]')
     parser.add_argument('--track_results', default='True',
                         help='Whether to track results on comet or not [default: True]')
-    parser.add_argument('--num_agents', type=int, default=2,
-                        help='Number of agents in particle environment [default: 2]')
+    parser.add_argument('--num_agents', type=int, default=3,
+                        help='Number of agents in particle environment [default: 3]')
     parser.add_argument('--env', default="particle",
                         help='Environment to run ("sc2" or "particle" [default: particle]')
 
@@ -418,7 +418,7 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 128, 'n_layers':2}
 
     model = Model(flags, env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=30, seq_len=80, discount=0.8, lam=0.8, lr_critic=0.0002, lr_actor=0.0001)
+                  batch_size=30, seq_len=80, discount=0.9, lam=0.8, lr_critic=0.0002, lr_actor=0.0001)
 
     st = time.time()
 

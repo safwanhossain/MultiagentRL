@@ -86,8 +86,9 @@ class BaseModel:
                 # for each agent, save observation, compute next action
                 for n in range(self.n_agents):
                     pi = self.policy(curr_agent_obs[n], actions[n, :], n, eps).cpu()
+                    if torch.sum(pi < 0.) > 0:
+                        print("YIKES")
                     # sample action from pi, convert to one-hot vector
-
                     action_idx = (torch.multinomial(pi, num_samples=1))
                     actions[n, :] = torch.zeros(self.action_size).scatter(0, action_idx, 1)
 
