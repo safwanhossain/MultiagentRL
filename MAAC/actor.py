@@ -55,7 +55,7 @@ class Actor_Network_Linear(torch.nn.Module):
 
         # Get a discrete probability  distribution over the action space
         ret = self.model(self.batch_norm(observation))
-        softmax_ret = nn.functional.softmax(ret)
+        softmax_ret = nn.functional.softmax(ret, dim=1)
 
         if get_regularized:
             return softmax_ret, (softmax_ret**2).mean(dim=1)

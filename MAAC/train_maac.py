@@ -123,9 +123,9 @@ class MAAC():
             critic_loss += reg[n].cuda()       # attention regularization (not mentioned in paper but implemented in their Github)
 
         # backpropagate the loss
-        self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
+        self.critic_optimizer.zero_grad()
         return float(critic_loss.cpu()[0])
     
     def update_agent(self, batch_size):
@@ -165,11 +165,12 @@ class MAAC():
 
             # Disable grad on critic - don't really need it cuz it gets zeroed in critic_update, but be safe
             utils.disable_grad(self.critic)
+            loss.backward(retain_graph=True)
+            utils.enable_grad(self.critic)
+            
+            self.agent_optimizers[n].step()
             self.agent_optimizers[n].zero_grad()
             agent_losses.append(float(loss.cpu()[0]))
-            loss.backward(retain_graph=True)
-            self.agent_optimizers[n].step()
-            utils.enable_grad(self.critic)
         self.agent_step += 1
         return agent_losses
     
@@ -191,84 +192,92 @@ class MAAC():
                 target_param.data.copy_(target_param.data * (self.tau) + param.data * (1 - self.tau))
 
 
+    def prep_training(self):
+        self.critic.train()
+        self.target_critic.train()
+        for a in self.agents:
+            a.get_network().train()
+        for t_a in self.target_agents:
+            t_a.get_network().train()
+    
+    def prep_rollouts(self):
+        for a in self.agents:
+            a.get_network().eval()
+        for t_a in self.target_agents:
+            t_a.get_network().eval()
+        
     def train(self):
         num_steps = 0
-        for ep in range(0, self.episodes):
-            # Step 1: initialize actions to NOOP and reset environments
-            joint_actions = torch.zeros(len(self.parallel_envs), self.n_agents, self.action_size)
-            reward_arr = torch.zeros(len(self.parallel_envs), self.seq_len)
-            curr_obs_n = []
-
-            # Clearing the buffer - the Github code does it slightly different
-            if ep % self.buffer_clear_mod == 0:
-                print("%%%%%%%%%%%%%% Clearing Buffer at ep ", ep, "%%%%%%%%%%%%%%%%%%%")
-                self.buffer.reset_all()
-
-            for l in range(len(self.parallel_envs)):
-                joint_actions[l, :, 0] = 1
-            for env in self.parallel_envs:
-                curr_obs_n.append(env.reset())
+        self.prep_rollouts()
+        for ep in range(0, self.episodes, len(self.parallel_envs)):
+            print("Episodes %i-%i of %i" % (ep + 1, ep + 1 + len(self.parallel_envs), self.episodes))
+            
+            curr_obs_tensor = torch.zeros((len(self.parallel_envs), self.n_agents, self.obs_size))
+            for i, env in enumerate(self.parallel_envs):
+                obs = env.reset()
+                for j in range(self.n_agents):
+                    curr_obs_tensor[i,j,:] = torch.FloatTensor(obs[j])
 
             critic_losses = []
             actor_losses = [[] for i in range(self.n_agents)]
-            for i in range(self.seq_len):
-                # Need to store actor observations to get the next action
-                obs_for_actor = torch.zeros(self.n_agents, len(self.parallel_envs), self.obs_size)
-                
-                for e, env in enumerate(self.parallel_envs):
-                    # get observations, by executing current joint action and store in buffer
-                    next_obs_n, reward_n, done_n, info_n = env.step(joint_actions[e])
-                    reward = reward_n[0]
-                    reward_arr[e,i] = reward
-                    self.buffer.add_to_buffer(curr_obs_n[e], next_obs_n, joint_actions[e], reward, e)
-                    
-                    # store the observations needed for actor forward pass
-                    for n in range(self.n_agents):
-                        obs_for_actor[n,e,:] = torch.from_numpy(next_obs_n[n][0:self.obs_size])  
-
-                    # next observation becomes the current ones
-                    curr_obs_n[e] = next_obs_n
-                
-                num_steps += len(self.parallel_envs)
-
-                # Step 3: compute the next action
+            reward_arr = []
+            for s in range(self.seq_len):
+                # Get the next action given the observation
                 joint_actions = torch.zeros(len(self.parallel_envs), self.n_agents, self.action_size)
                 for k, agent in enumerate(self.agents):
-                    obs = obs_for_actor[k]
-                    dist = agent.action(obs.cuda())    # the environments can be treated as a batch
+                    obs_agent = curr_obs_tensor.permute(1,0,2)[k]
+                    dist = agent.action(obs_agent.cuda())    # the environments can be treated as a batch
                     
                     # sample action from pi, convert to one-hot vector
                     action_idx = (torch.multinomial(dist.cpu(), num_samples=1)).numpy().flatten()
                     for l in range(len(self.parallel_envs)):
-                        joint_actions[l][n][action_idx[l]] = 1
+                        joint_actions[l][k][action_idx[l]] = 1
+
+                next_obs_tensor = torch.zeros(len(self.parallel_envs), self.n_agents, self.obs_size)
+                for e, env in enumerate(self.parallel_envs):
+                    # get observations, by executing current joint action and store in buffer
+                    next_obs_n, reward_n, done_n, info_n = env.step(joint_actions[e])
+                    for j in range(self.n_agents):
+                        next_obs_tensor[e, j, :] = torch.FloatTensor(next_obs_n[j])
+
+                    reward = reward_n[0]
+                    reward_arr.append(reward)
+                    self.buffer.add_to_buffer(curr_obs_tensor[e], next_obs_n, joint_actions[e], reward, e)
+                    
+                # next observation becomes the current ones
+                curr_obs_tensor = next_obs_tensor
+                num_steps += len(self.parallel_envs)
 
                 critic_loss = []
                 agent_loss = [[] for _ in range(self.n_agents)]
-                if self.buffer.length() > self.batch_size and num_steps >= self.steps_per_update:
+                if (self.buffer.length() > self.batch_size and \
+                        (num_steps % self.steps_per_update) < len(self.parallel_envs)):
+                    self.prep_training()
                     for _ in range(self.num_updates):
                         critic_loss.append(self.update_critic(self.batch_size))
                         agent_losses = self.update_agent(self.batch_size)
-                        for j in range(self.n_agents):
-                            agent_loss[j].append(agent_losses[j])
+                        #for j in range(self.n_agents):
+                        #    agent_loss[j].append(agent_losses[j])
 
                     self.update_target_networks()
-                    num_steps = 0
                     critic_loss_mean = sum(critic_loss)/len(critic_loss)
                     self.experiment.log_metric("Critic loss", critic_loss_mean, self.log_step)
-                    for j in range(self.n_agents):
-                        agent_loss_mean = sum(agent_loss[j])/len(agent_loss[j])
-                        self.experiment.log_metric("Agent " + str(j) + " loss", agent_loss_mean, self.log_step)
+                    #for j in range(self.n_agents):
+                    #    agent_loss_mean = sum(agent_loss[j])/len(agent_loss[j])
+                    #    self.experiment.log_metric("Agent " + str(j) + " loss", agent_loss_mean, self.log_step)
                     self.log_step += 1
-            
+                    self.prep_rollouts()
+
             # print the reward at end of each episode
-            print('Reward', torch.mean(reward_arr))
-            self.experiment.log_metric("Reward", torch.mean(reward_arr), ep)
+            mean_reward = sum(reward_arr)/len(reward_arr)
+            print('Reward', mean_reward)
+            self.experiment.log_metric("Reward", mean_reward, ep)
 
 def main():
     parallel_envs = make_parallel_environments("simple_spread", 12)
     
     experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name="MAAC")
-    big_MAAC = MAAC(parallel_envs, n_agents=3, action_size=5, agent_obs_size=14, log=experiment)    
+    big_MAAC = MAAC(parallel_envs, n_agents=3, action_size=5, agent_obs_size=18, log=experiment)    
     big_MAAC.train()
 
 
