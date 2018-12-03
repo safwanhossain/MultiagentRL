@@ -13,6 +13,8 @@ _PLAYER_SELF = features.PlayerRelative.SELF
 _PLAYER_NEUTRAL = features.PlayerRelative.NEUTRAL  # beacon/minerals
 _PLAYER_ENEMY = features.PlayerRelative.ENEMY
 
+NUM_MOVE_ACTIONS = 4
+
 class SC2EnvWrapper:
 
     mini_games = {
@@ -20,14 +22,14 @@ class SC2EnvWrapper:
             "NUM_ALLIES": 20,  # Used to determine input size to NN
             "NUM_OTHERS": 4,  # Used to determine input size to NN
             "NUM_TOTAL": 25,
-            "ACTION_SIZE": 2 + 16 + 4 # 2 for noop and stop, 16 for movements, 4 to target enemies,
+            "ACTION_SIZE": 2 + NUM_MOVE_ACTIONS + 4 # 2 for noop and stop, NUM_MOVE_ACTIONS for movements, 4 to target enemies,
         },
 
         "CollectMineralShards": {
             "NUM_ALLIES": 2,  # Used to determine input size to NN
             "NUM_OTHERS": 20,  # Used to determine input size to NN
             "NUM_TOTAL": 22,
-            "ACTION_SIZE":2 + 16 # 2 for noop and stop, 16 for movement
+            "ACTION_SIZE":2 + NUM_MOVE_ACTIONS # 2 for noop and stop, NUM_MOVE_ACTIONS for movement
         }
     }
 
@@ -36,7 +38,7 @@ class SC2EnvWrapper:
         1680: 2
     }
 
-    def __init__(self, map, step_mul=None, visualize=False):
+    def __init__(self, map, step_mul=8, visualize=False):
         """
         :param map[string]: map to use
         :param agent_type[agent object type]: agent to use
@@ -49,7 +51,7 @@ class SC2EnvWrapper:
                                                 use_raw_units=True,
                                                 camera_width_world_units=24)
         self.map = map
-        self.step_mul = step_mul or 1
+        self.step_mul = step_mul
         self.visualize = visualize
 
         self.mg_info = SC2EnvWrapper.mini_games[map]
@@ -188,9 +190,9 @@ class SC2EnvWrapper:
                 unit_cmd = self.noop(unit_tag)
             elif index == 1:
                 unit_cmd = self.stop(unit_tag)
-            elif 1 < index <= 17:
+            elif 1 < index <= NUM_MOVE_ACTIONS + 1:
                 unit_cmd = self.move(unit_tag, index, xy)
-            elif index > 16:
+            elif index > NUM_MOVE_ACTIONS + 1:
                 unit_cmd = self.attack(unit_tag, index, xy)
 
             raw_action = raw_pb.ActionRaw(unit_command=unit_cmd)
@@ -210,7 +212,7 @@ class SC2EnvWrapper:
         :return: move action
         """
         index = index - 2
-        angle = 2. * np.pi * index / 16
+        angle = 2. * np.pi * index / NUM_MOVE_ACTIONS
         x = int(round(xy[0] + np.cos(angle) * 10))
         y = int(round(xy[1] + np.sin(angle) * 10))
 
@@ -228,7 +230,7 @@ class SC2EnvWrapper:
         :param xy: current xy location of unit
         :return: attack action
         """
-        target_idx = self.mg_info["NUM_ALLIES"] + (index - 17)
+        target_idx = self.mg_info["NUM_ALLIES"] + (index - NUM_MOVE_ACTIONS - 1)
         target_xy = (self.global_obs[target_idx].x, self.global_obs[target_idx].y)
         # Out of Marine range see https://liquipedia.net/starcraft2/Marine_(Legacy_of_the_Void)
         if np.sqrt(np.sum(np.square(xy - target_xy)), axis=1) > 5:

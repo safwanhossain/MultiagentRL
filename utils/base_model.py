@@ -10,7 +10,7 @@ class BaseModel:
         Initializes comet tracking and cuda gpu
         """
         super().__init__()
-        self.experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name='test1',#self.__class__.__name__,
+        self.experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name='sc2',#self.__class__.__name__,
                                      auto_param_logging=False, auto_metric_logging=False,
                                      disabled=(not track_results))
         self.use_gpu = use_gpu
@@ -81,13 +81,13 @@ class BaseModel:
                 rewards.append(reward)
 
                 if end_signal:
+                    print("HIT RESET")
                     break
 
                 # for each agent, save observation, compute next action
                 for n in range(self.n_agents):
                     pi = self.policy(curr_agent_obs[n], actions[n, :], n, eps).cpu()
-                    if torch.sum(pi < 0.) > 0:
-                        print("YIKES")
+
                     # sample action from pi, convert to one-hot vector
                     action_idx = (torch.multinomial(pi, num_samples=1))
                     actions[n, :] = torch.zeros(self.action_size).scatter(0, action_idx, 1)
@@ -95,7 +95,7 @@ class BaseModel:
             count += self.seq_len
 
         print("Mean reward for this batch: {0:5.3}".format(np.mean(rewards)))
-        return np.mean(rewards)
+        return np.sum(rewards)
 
     def train(self):
         """
@@ -103,7 +103,7 @@ class BaseModel:
         """
         metrics = {}
         for e in range(self.epochs):
-            eps = 0 if self.SAC else max(0.01, 0.15 - 0.15*e/self.epochs)
+            eps = 0. if self.SAC else max(0.01, 0.15 - 0.15*e/self.epochs)
             metrics["Reward"] = self.gather_batch(eps=eps)
             metrics["Critic Loss"], metrics["Actor Loss"] = self.update(e)
              # self.evaluate()

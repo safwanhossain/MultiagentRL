@@ -48,7 +48,7 @@ class Model(BaseModel):
         self.action_size = env.action_size
         self.obs_size = env.agent_obs_size
         self.state_size = env.global_state_size
-        self.alpha = 0.2
+        self.alpha = 0.1
         self.env = env
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
@@ -203,7 +203,7 @@ class Model(BaseModel):
                 # advantage[a] = (advantage[a] - advantage[a].mean()) / advantage[a].std()  # make it 0 mean and 1 var (idk why??)
 
             if self.SAC:
-                entropy = torch.sum(torch.log(pi) * pi, dim=-1).unsqueeze_(-1)
+                entropy = torch.sum(torch.log(pi), dim=-1).unsqueeze_(-1)
                 advantage[a] -= self.alpha * entropy
 
             # loss is negative log of probability of chosen action, scaled by the advantage
@@ -225,7 +225,7 @@ class Model(BaseModel):
         self.actor_optimizer.zero_grad()
         # Clear state of actor's GRU Cell
         self.actor.reset()
-        return sum_loss / (self.n_agents * self.seq_len)
+        return sum_loss / (self.n_agents)
 
     def td_one(self):
         """
@@ -252,7 +252,7 @@ class Model(BaseModel):
                 joint_action_dist = 1
                 for a in range(self.n_agents):
                     joint_action_dist *= self.actor(self.actor_input_pl[a][:, t + 1, :], eps=0)
-                G[:, :, t, 1] -= self.alpha * torch.sum(torch.log(joint_action_dist) * joint_action_dist, dim=-1)
+                    G[:, :, t, 1] -= self.alpha * torch.sum(torch.log(joint_action_dist), dim=-1)
 
             pred = self.critic.forward(self.get_critic_input(t)).squeeze()
 
@@ -326,7 +326,7 @@ class Model(BaseModel):
             pred = self.critic(self.get_critic_input(t)).squeeze()
             # print('pred', pred[0])
 
-            loss = torch.mean(torch.pow(targets[:, :, t] - pred, 2)) / self.seq_len
+            loss = torch.mean(torch.pow(targets[:, :, t] - pred, 2))
             sum_loss += loss.item()
             # print("critic loss", sum_loss)
             # fit the Critic
@@ -393,7 +393,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu', default='True',
                         help='use GPU if True, CPU if False [default: True]')
-    parser.add_argument('--maac', default='True',
+    parser.add_argument('--maac', default='False',
                         help='Whether to use maac critic or not [default: True]')
     parser.add_argument('--SAC', default='True',
                         help='Whether to use SAC or not [default: True]')
@@ -401,7 +401,7 @@ if __name__ == "__main__":
                         help='Whether to track results on comet or not [default: True]')
     parser.add_argument('--num_agents', type=int, default=3,
                         help='Number of agents in particle environment [default: 3]')
-    parser.add_argument('--env', default="particle",
+    parser.add_argument('--env', default="sc2",
                         help='Environment to run ("sc2" or "particle" [default: particle]')
 
     flags = parser.parse_args()
@@ -414,11 +414,11 @@ if __name__ == "__main__":
     else:
         raise TypeError("Requested environment does not exist or is not implemented yet")
 
-    policy_arch = {'type': MLPActor, 'h_size': 128}
-    critic_arch = {'h_size': 128, 'n_layers':2}
+    policy_arch = {'type': MLPActor, 'h_size': 256}
+    critic_arch = {'h_size': 256, 'n_layers': 3}
 
     model = Model(flags, env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=30, seq_len=80, discount=0.9, lam=0.8, lr_critic=0.0002, lr_actor=0.0001)
+                  batch_size=20, seq_len=400, discount=0.95, lam=0.8, lr_critic=0.00001, lr_actor=0.0001)
 
     st = time.time()
 
