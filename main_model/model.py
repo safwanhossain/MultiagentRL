@@ -377,7 +377,7 @@ class Model(BaseModel):
         """
         self.format_buffer_data()
 
-        if epoch % 2 == 0:
+        if epoch % 5 == 0:
             # print('e', epoch)
             self.update_target_network()
 

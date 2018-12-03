@@ -103,11 +103,11 @@ class BaseModel:
         """
         metrics = {}
         for e in range(self.epochs):
+            self.experiment.set_step(e)
             eps = 0. if self.SAC else max(0.01, 0.15 - 0.15*e/self.epochs)
             metrics["Reward"] = self.gather_batch(eps=eps)
             metrics["Critic Loss"], metrics["Actor Loss"] = self.update(e)
              # self.evaluate()
 
             self.experiment.log_multiple_metrics(metrics)
-            self.experiment.set_step(e)
 
