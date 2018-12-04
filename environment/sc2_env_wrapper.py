@@ -124,7 +124,7 @@ class SC2EnvWrapper:
             if unit.alliance != _PLAYER_SELF:
                 continue
 
-            agent_obs = np.zeros([self.mg_info["NUM_TOTAL"] - 1, 6])
+            agent_obs = np.zeros([self.mg_info["NUM_TOTAL"] - 1, 4])
             # precalculate all distances usig matrices
             xy_distances = [unit.x, unit.y] - xy
             distances = np.sqrt(np.sum(np.square(xy_distances), axis=1))

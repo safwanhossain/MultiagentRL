@@ -1,11 +1,11 @@
 #!/usr/bin/python3
 import argparse
 from utils.base_model import BaseModel
-from actors import GRUActor, MLPActor
+from main_model.actors import GRUActor, MLPActor
 from environment.particle_env import make_env, visualize
 from environment.sc2_env_wrapper import SC2EnvWrapper
-from critic_maac import Critic as MAAC_Critic
-from critic import Critic
+from main_model.critic_maac import Critic as MAAC_Critic
+from main_model.critic import Critic
 import numpy as np
 
 from utils.buffer import Buffer
@@ -52,7 +52,7 @@ class Model(BaseModel):
         self.env = env
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
-        self.epochs = 10000
+        self.epochs = 1000
         self.num_updates = 1
         self.num_entries_per_update = self.batch_size * self.seq_len
 
@@ -288,7 +288,7 @@ class Model(BaseModel):
         for t in range(self.seq_len - 1, -1, -1):
 
             # loop from one-step lookahead to pure MC estimate
-            for n in range(1, self.seq_len - 1):
+            for n in range(1, 10): #self.seq_len - 1):
 
                 # pure MC
                 if t + n > self.seq_len - 1:
@@ -418,7 +418,7 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 256, 'n_layers': 3}
 
     model = Model(flags, env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=20, seq_len=400, discount=0.95, lam=0.8, lr_critic=0.00001, lr_actor=0.0001)
+                  batch_size=5, seq_len=30, discount=0.6, lam=0.6, lr_critic=0.00001, lr_actor=0.0001)
 
     st = time.time()
 
