@@ -1,4 +1,6 @@
 #!/usr/bin/python3
+import sys
+sys.path.append('../')
 import argparse
 from utils.base_model import BaseModel
 from actors import GRUActor, MLPActor
@@ -24,7 +26,7 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
 
 class Model(BaseModel):
 
-    def __init__(self, flags, env, critic_arch, policy_arch, batch_size, seq_len, discount, lam,
+    def __init__(self, flags, envs, critic_arch, policy_arch, batch_size, seq_len, discount, lam,
                  lr_critic=0.0001, lr_actor=0.0001):
         """
         Initialize all aspects of the model
@@ -44,12 +46,13 @@ class Model(BaseModel):
         self.seq_len = seq_len
         self.discount = discount
         self.lam = lam
-        self.n_agents = env.n
-        self.action_size = env.action_size
-        self.obs_size = env.agent_obs_size
-        self.state_size = env.global_state_size
+        self.n_agents = envs[0].n
+        self.action_size = envs[0].action_size
+        self.obs_size = envs[0].agent_obs_size
+        self.state_size = envs[0].global_state_size
         self.alpha = 0.2
-        self.env = env
+        self.envs = envs
+        self.num_envs = len(envs)
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
         self.epochs = 10000
@@ -61,7 +64,7 @@ class Model(BaseModel):
 
         # The buffer to hold all the information of an episode
         self.buffer = Buffer(self.num_entries_per_update, self.seq_len, self.num_entries_per_update,
-                             self.n_agents, env.agent_obs_size, env.global_state_size, env.action_size)
+                             self.n_agents, self.obs_size, self.state_size, self.action_size)
 
         # Create "placeholders" for incoming training data (Sorry, tensorflow habit)
         # joint-action state pairs
@@ -403,21 +406,27 @@ if __name__ == "__main__":
                         help='Number of agents in particle environment [default: 3]')
     parser.add_argument('--env', default="particle",
                         help='Environment to run ("sc2" or "particle" [default: particle]')
+    parser.add_argument('--num_env', default="1",
+                        help='Number of parallel environments (default to 1)')
 
     flags = parser.parse_args()
 
-
+    envs = []
     if flags.env == "particle":
-        env = make_env(n_agents=flags.num_agents)
+        for i in range(int(flags.num_env)):
+            env = make_env(n_agents=flags.num_agents)
+            np.random.seed(i*1000)
+            env.seed(i*1000)
+            envs.append(env)
     elif flags.env == "sc2":
-        env = SC2EnvWrapper("CollectMineralShards")
+        envs = [SC2EnvWrapper("CollectMineralShards") for _ in range(int(flags.num_ev))]
     else:
         raise TypeError("Requested environment does not exist or is not implemented yet")
 
     policy_arch = {'type': MLPActor, 'h_size': 128}
     critic_arch = {'h_size': 128, 'n_layers':2}
 
-    model = Model(flags, env=env, critic_arch=critic_arch, policy_arch=policy_arch,
+    model = Model(flags, envs=envs, critic_arch=critic_arch, policy_arch=policy_arch,
                   batch_size=30, seq_len=80, discount=0.9, lam=0.8, lr_critic=0.0002, lr_actor=0.0001)
 
     st = time.time()

@@ -10,7 +10,8 @@ class BaseModel:
         Initializes comet tracking and cuda gpu
         """
         super().__init__()
-        self.experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', project_name='test1',#self.__class__.__name__,
+        self.experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', \
+                project_name='all_in_one_safwan',#self.__class__.__name__,
                                      auto_param_logging=False, auto_metric_logging=False,
                                      disabled=(not track_results))
         self.use_gpu = use_gpu
@@ -28,7 +29,7 @@ class BaseModel:
             "batch_size": self.batch_size,
             "seq_len": self.seq_len,
             "discount": self.discount,
-            "n_agents": self.env.n,
+            "n_agents": self.envs[0].n,
             "lr_critic": self.lr_critic,
             "lr_actor": self.lr_actor,
         })
@@ -38,15 +39,18 @@ class BaseModel:
         rewards = []
 
         # initialize action to noop
-        actions = torch.zeros(self.n_agents, self.env.action_size)
+        actions = torch.zeros(self.n_agents, self.action_size)
         actions[:, 0] = 1
         # np.random.seed()
-        curr_agent_obs, curr_global_state, reward = self.env.reset()
+
+        # randomly select an env for evaluation
+        env = self.envs[np.random.choice(self.num_envs)]
+        curr_agent_obs, curr_global_state, reward = env.reset()
 
         for t in range(self.seq_len):
             # get observations, by executing current action
             # TODO add parallelism
-            next_agent_obs, next_global_state, reward = self.env.step(actions)
+            next_agent_obs, next_global_state, reward = env.step(actions)
             rewards.append(reward)
             for n in range(self.n_agents):
                 pi = self.policy(curr_agent_obs[n], actions[n, :], n, eps=0).cpu()
@@ -65,15 +69,18 @@ class BaseModel:
         rewards = []
         while count < self.num_entries_per_update:
             # initialize action to noop
-            actions = torch.zeros(self.n_agents, self.env.action_size)
+            actions = torch.zeros(self.n_agents, self.action_size)
             actions[:, 0] = 1
             # np.random.seed()
-            curr_agent_obs, curr_global_state, reward, _ = self.env.reset()
+
+            # select a random environment to simulate
+            env = self.envs[np.random.choice(self.num_envs)]
+            curr_agent_obs, curr_global_state, reward, _ = env.reset()
 
             for t in range(self.seq_len):
                 # get observations, by executing current action
                 # TODO add parallelism
-                next_agent_obs, next_global_state, reward, end_signal = self.env.step(actions)
+                next_agent_obs, next_global_state, reward, end_signal = env.step(actions)
 
                 self.buffer.add_to_buffer(t, curr_agent_obs, next_agent_obs, curr_global_state, next_global_state,
                                            actions, reward)
