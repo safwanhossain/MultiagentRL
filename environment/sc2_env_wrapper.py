@@ -58,8 +58,8 @@ class SC2EnvWrapper:
 
         self.n = self.mg_info["NUM_ALLIES"]
         self.action_size = self.mg_info["ACTION_SIZE"]
-        self.agent_obs_size = (self.mg_info["NUM_TOTAL"] - 1) * 6
-        self.global_state_size = self.mg_info["NUM_TOTAL"] * 5
+        self.agent_obs_size = (self.mg_info["NUM_TOTAL"] - 1) * 4
+        self.global_state_size = self.mg_info["NUM_TOTAL"] * 3
         self.env = sc2_env.SC2Env(map_name=self.map,
                    agent_interface_format=self.aif,
                    step_mul=self.step_mul,
@@ -94,7 +94,7 @@ class SC2EnvWrapper:
         """
         obs = timestep[0].observation
         agent_observations = np.zeros([self.mg_info["NUM_ALLIES"], self.agent_obs_size], dtype=np.float32)
-        global_observations = np.zeros([self.mg_info["NUM_TOTAL"], 5], dtype=np.float32)
+        global_observations = np.zeros([self.mg_info["NUM_TOTAL"], 3], dtype=np.float32)
         # Get xy of all units
         raw_units = sorted(obs.raw_units, key=lambda u: u.tag)
         xy = np.array([[unit.x, unit.y] for unit in raw_units])
@@ -116,9 +116,9 @@ class SC2EnvWrapper:
 
             global_observations[gi] = [ut,
                                        unit.x,
-                                       unit.y,
-                                       unit.health,
-                                       unit.shield]
+                                       unit.y] #,
+                                       # unit.health,
+                                       # unit.shield]
             self.unit_tags[gi] = unit.tag
 
             if unit.alliance != _PLAYER_SELF:
@@ -155,16 +155,16 @@ class SC2EnvWrapper:
                 agent_obs[obs_idx] = [ut,
                                       xy_distances[unit_idx][0],
                                       xy_distances[unit_idx][1],
-                                      distances[unit_idx],
-                                      other_unit.health,
-                                      other_unit.shield]
-
-            agent_obs -=  np.mean(agent_obs, axis=0, keepdims=True)
-            agent_obs /= (np.std(agent_obs, axis=0, keepdims=True) + 1e-8)
+                                      distances[unit_idx]]#,
+                                      # other_unit.health,
+                                      # other_unit.shield]
+            #
+            # agent_obs[:, 4:] -=  np.mean(agent_obs[4:], axis=0, keepdims=True)
+            # agent_obs[:, 4:] /= (np.std(agent_obs[4:], axis=0, keepdims=True) + 1e-8)
             agent_observations[global_idx_self - 1] = agent_obs.flatten()
-
-        global_observations -= np.mean(global_observations, axis=0, keepdims=True)
-        global_observations /= (np.std(global_observations, axis=0, keepdims=True) + 1e-8)
+        #
+        # global_observations[:, 3:] -= np.mean(global_observations[3:], axis=0, keepdims=True)
+        # global_observations[:, 3:] /= (np.std(global_observations[3:], axis=0, keepdims=True) + 1e-8)
 
         self.global_obs, self.agent_obs = global_observations, agent_observations
 
