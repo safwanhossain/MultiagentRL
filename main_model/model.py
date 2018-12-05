@@ -7,6 +7,7 @@ from environment.sc2_env_wrapper import SC2EnvWrapper
 from main_model.critic_maac import Critic as MAAC_Critic
 from main_model.critic import Critic
 import numpy as np
+import os
 
 from utils.buffer import Buffer
 
@@ -52,7 +53,7 @@ class Model(BaseModel):
         self.env = env
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
-        self.epochs = 1000
+        self.epochs = 10
         self.num_updates = 1
         self.num_entries_per_update = self.batch_size * self.seq_len
 
@@ -118,6 +119,17 @@ class Model(BaseModel):
         self.set_params()
         self.experiment.log_multiple_params(self.policy_arch)
         self.experiment.log_multiple_params(self.critic_arch)
+
+    def load_model(self, key):
+        self.critic = torch.load("saved_models/" + key + "_critic.pt")
+        self.actor = torch.load("saved_models/" + key + "_actor.pt")
+        print("Model loaded using key", key)
+
+    def save_model(self):
+        if not os.path.exists("saved_models/"):
+            os.makedirs("saved_models/")
+        torch.save(self.critic.state_dict(), "saved_models/" + self.experiment.get_key() + "_critic.pt")
+        torch.save(self.actor.state_dict(), "saved_models/" + self.experiment.get_key() + "_actor.pt")
 
     def get_critic_input(self, start_end=None):
         """
@@ -315,7 +327,7 @@ class Model(BaseModel):
             loss.backward(retain_graph=True)
             self.critic_optimizer.step()
 
-        return sum_loss / lt
+        return sum_loss / lt.float()
 
     def format_buffer_data(self):
         """
@@ -386,14 +398,19 @@ if __name__ == "__main__":
                         help='Number of agents in particle environment [default: 3]')
     parser.add_argument('--env', default="sc2",
                         help='Environment to run ("sc2" or "particle" [default: particle]')
+    parser.add_argument('--evaluate', default="False",
+                        help='If True, load previously trained model and evaluate [default: False]')
+    parser.add_argument('--load_key', default=None,
+                        help='If not none, load model from exp key')
 
     flags = parser.parse_args()
-
 
     if flags.env == "particle":
         env = make_env(n_agents=flags.num_agents)
     elif flags.env == "sc2":
-        env = SC2EnvWrapper("CollectMineralShards")
+        visualize_ = flags.evaluate.lower() in ["true", "t", "yes", "y"]
+        print("visualize", visualize_)
+        env = SC2EnvWrapper("CollectMineralShards", visualize=visualize_)
     else:
         raise TypeError("Requested environment does not exist or is not implemented yet")
 
@@ -401,14 +418,19 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 128, 'n_layers': 3}
 
     model = Model(flags, env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=20, seq_len=400, discount=0.7, lam=0.7, lr_critic=0.000001, lr_actor=0.0001)
+                  batch_size=30, seq_len=400, discount=0.7, lam=0.7, lr_critic=0.000001, lr_actor=0.0001)
+
+    if flags.load_key is not None:
+        model.load_model(flags.load_key)
 
     st = time.time()
 
-    try:
-        model.train()
-    except KeyboardInterrupt:
-        pass
-
+    model.train()
+    model.save_model()
+    # try:
+    #     model.train()
+    # except KeyboardInterrupt:
+    #     pass
+    #
     print("Time taken for {0:d} epochs {1:10.4f}".format(model.epochs, time.time() - st))
-    visualize(model)
+    # visualize(model)

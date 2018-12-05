@@ -45,7 +45,7 @@ class SC2EnvWrapper:
         1680: 3
     }
 
-    def __init__(self, map, step_mul=5, visualize=True):
+    def __init__(self, map, step_mul=5, visualize=False):
         """
         :param map[string]: map to use
         :param agent_type[agent object type]: agent to use
