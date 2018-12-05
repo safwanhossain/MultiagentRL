@@ -22,14 +22,14 @@ class SC2EnvWrapper:
             "NUM_ALLIES": 20,  # Used to determine input size to NN
             "NUM_OTHERS": 4,  # Used to determine input size to NN
             "NUM_TOTAL": 25,
-            "ACTION_SIZE": 2 + NUM_MOVE_ACTIONS + 4 # 2 for noop and stop, NUM_MOVE_ACTIONS for movements, 4 to target enemies,
+            "ACTION_SIZE": NUM_MOVE_ACTIONS + 4 # 2 +  #2 for noop and stop, NUM_MOVE_ACTIONS for movements, 4 to target enemies,
         },
 
         "CollectMineralShards": {
             "NUM_ALLIES": 2,  # Used to determine input size to NN
             "NUM_OTHERS": 20,  # Used to determine input size to NN
             "NUM_TOTAL": 22,
-            "ACTION_SIZE":2 + NUM_MOVE_ACTIONS, # 2 for noop and stop, NUM_MOVE_ACTIONS for movement
+            "ACTION_SIZE": NUM_MOVE_ACTIONS, # 2 + , # 2 for noop and stop, NUM_MOVE_ACTIONS for movement
             "X_MAP_SIZE": 63, # Map size is 64x64, with indices between 0 and 63
             "Y_MAP_SIZE": 63
         }
@@ -40,7 +40,7 @@ class SC2EnvWrapper:
         1680: 2
     }
 
-    def __init__(self, map, step_mul=8, visualize=False):
+    def __init__(self, map, step_mul=8, visualize=True):
         """
         :param map[string]: map to use
         :param agent_type[agent object type]: agent to use
@@ -176,7 +176,7 @@ class SC2EnvWrapper:
         num_crystals = global_idx_other - 1
         if num_crystals > self.num_crystals:
             print("CRYSTALS CLEARED")
-            reward += 1000
+            reward += 10
             self.num_crystals = num_crystals
 
 
@@ -198,11 +198,11 @@ class SC2EnvWrapper:
             unit_tag = self.unit_tags[n]
             xy = (self.global_obs[n][1], self.global_obs[n][2])
             unit_cmd = None
-            if index == 0:
-                unit_cmd = self.noop(unit_tag)
-            elif index == 1:
-                unit_cmd = self.stop(unit_tag)
-            elif 1 < index <= NUM_MOVE_ACTIONS + 1:
+            # if index == 0:
+            #     unit_cmd = self.noop(unit_tag)
+            # elif index == 1:
+            #     unit_cmd = self.stop(unit_tag)
+            if 0 <= index < NUM_MOVE_ACTIONS:
                 unit_cmd = self.move(unit_tag, index, xy)
             elif index > NUM_MOVE_ACTIONS + 1:
                 unit_cmd = self.attack(unit_tag, index, xy)
@@ -223,13 +223,13 @@ class SC2EnvWrapper:
         :param xy: current xy location of unit
         :return: move action
         """
-        index = index - 2
+        index = index
         angle = 2. * np.pi * index / NUM_MOVE_ACTIONS
         x = int(round(xy[0] + np.cos(angle) * 100))
         y = int(round(xy[1] + np.sin(angle) * 100))
 
         x = np.clip(x, 0, self.mg_info["X_MAP_SIZE"])
-        y = np.clip(y, 0, self.mg_info["y_MAP_SIZE"])
+        y = np.clip(y, 0, self.mg_info["Y_MAP_SIZE"])
 
         point = common_pb.Point2D(x=x, y=y)
         return raw_pb.ActionRawUnitCommand(ability_id = 16,

@@ -203,7 +203,7 @@ class Model(BaseModel):
                 # advantage[a] = (advantage[a] - advantage[a].mean()) / advantage[a].std()  # make it 0 mean and 1 var (idk why??)
 
             if self.SAC:
-                entropy = torch.sum(torch.log(pi), dim=-1).unsqueeze_(-1)
+                entropy = torch.sum(torch.log(pi) * pi, dim=-1).unsqueeze_(-1)
                 advantage[a] -= self.alpha * entropy
 
             # loss is negative log of probability of chosen action, scaled by the advantage
@@ -252,7 +252,7 @@ class Model(BaseModel):
                 joint_action_dist = 1
                 for a in range(self.n_agents):
                     joint_action_dist *= self.actor(self.actor_input_pl[a][:, t + 1, :], eps=0)
-                    G[:, :, t, 1] -= self.alpha * torch.sum(torch.log(joint_action_dist), dim=-1)
+                    G[:, :, t, 1] -= self.alpha * torch.sum(torch.log(joint_action_dist) * joint_action_dist, dim=-1)
 
             pred = self.critic.forward(self.get_critic_input(t)).squeeze()
 
@@ -273,9 +273,10 @@ class Model(BaseModel):
         :return:
         """
         lam = self.lam
+        n_ahead = 5
 
         # first compute the future discounted return at every step using the sequence of rewards
-        G = np.zeros((self.n_agents, self.batch_size, self.seq_len, self.seq_len))
+        G = np.zeros((self.n_agents, self.batch_size, self.seq_len, n_ahead))
 
         # initialize the first column with estimates from the target Q network
         # predictions = self.target_critic(self.joint_action_state_pl).squeeze()
@@ -285,36 +286,43 @@ class Model(BaseModel):
         G[:, :, :, 0] = predictions.detach().cpu().numpy()
 
         # by moving backwards, construct the G matrix
-        for t in range(self.seq_len - 1, -1, -1):
+        for t in range(self.seq_len - n_ahead - 1, -1, -1):
 
             # loop from one-step lookahead to pure MC estimate
-            for n in range(1, 10): #self.seq_len - 1):
+            # for n in range(1, n_ahead): #self.seq_len - 1):
 
-                # pure MC
-                if t + n > self.seq_len - 1:
-                    G[:, :, t, n] = self.reward_seq_pl[:, t:].dot(np.fromfunction(lambda i: self.discount**i,
-                                                                                 shape=(self.seq_len-t,)))
 
-                # combination of MC + bootstrapping
-                else:
-                    G[:, :, t, n] = self.reward_seq_pl[:, t] + self.discount*G[:, :, t+1, n-1]
+            for n in range(1, n_ahead):
+                discount_factor = np.fromfunction(lambda i: self.discount ** i, shape=(n,))
+
+                G[:, :, t, n] = self.reward_seq_pl[:, t:t+n].dot(discount_factor) \
+                                + self.discount**n * G[:, :, t + n, 0]
+
+                # # pure MC
+                # if t + n > self.seq_len - 1:
+                #     G[:, :, t, n] = self.reward_seq_pl[:, t:].dot(np.fromfunction(lambda i: self.discount**i,
+                #                                                                  shape=(self.seq_len-t,)))
+                #
+                # # combination of MC + bootstrapping
+                # else:
+                #     G[:, :, t, n] = self.reward_seq_pl[:, t] + self.discount*G[:, :, t+1, n-1]
 
         # compute target at timestep t
         targets = torch.zeros((self.n_agents, self.batch_size, self.seq_len), dtype=torch.float32).to(self.device)
 
         sum_loss = 0.0
 
+        # vector of powers of lambda
+        weights = np.fromfunction(lambda i: lam ** i, shape=(n_ahead,))
+
+        # normalize
+        weights = weights / np.sum(weights)
+
         # by moving backwards except for the last transition, compute targets and update critic
-        for t in range(self.seq_len - 2, -1, -1):
-
-            # vector of powers of lambda
-            weights = np.fromfunction(lambda i: lam ** i, shape=(self.seq_len - 1 - t,))
-
-            # normalize
-            weights = weights / np.sum(weights)
+        for t in range(self.seq_len - n_ahead - 1, -1, -1):
 
             # print('t', t)
-            targets[:, :, t] = torch.from_numpy(G[:, :, t, 1:self.seq_len-t].dot(weights)).to(self.device)
+            targets[:, :, t] = torch.from_numpy(G[:, :, t, :].dot(weights)).to(self.device)
 
             if self.SAC:
                 joint_action_dist = 1
@@ -414,11 +422,11 @@ if __name__ == "__main__":
     else:
         raise TypeError("Requested environment does not exist or is not implemented yet")
 
-    policy_arch = {'type': MLPActor, 'h_size': 256}
-    critic_arch = {'h_size': 256, 'n_layers': 3}
+    policy_arch = {'type': MLPActor, 'h_size': 128}
+    critic_arch = {'h_size': 128, 'n_layers': 3}
 
     model = Model(flags, env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=20, seq_len=350, discount=0.6, lam=0.6, lr_critic=0.00001, lr_actor=0.0001)
+                  batch_size=20, seq_len=400, discount=0.8, lam=0.8, lr_critic=0.000001, lr_actor=0.0001)
 
     st = time.time()
 
