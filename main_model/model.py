@@ -418,7 +418,7 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 256, 'n_layers': 3}
 
     model = Model(flags, env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=5, seq_len=30, discount=0.6, lam=0.6, lr_critic=0.00001, lr_actor=0.0001)
+                  batch_size=20, seq_len=350, discount=0.6, lam=0.6, lr_critic=0.00001, lr_actor=0.0001)
 
     st = time.time()
 

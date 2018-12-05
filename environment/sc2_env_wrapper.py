@@ -29,7 +29,9 @@ class SC2EnvWrapper:
             "NUM_ALLIES": 2,  # Used to determine input size to NN
             "NUM_OTHERS": 20,  # Used to determine input size to NN
             "NUM_TOTAL": 22,
-            "ACTION_SIZE":2 + NUM_MOVE_ACTIONS # 2 for noop and stop, NUM_MOVE_ACTIONS for movement
+            "ACTION_SIZE":2 + NUM_MOVE_ACTIONS, # 2 for noop and stop, NUM_MOVE_ACTIONS for movement
+            "X_MAP_SIZE": 63, # Map size is 64x64, with indices between 0 and 63
+            "Y_MAP_SIZE": 63
         }
     }
 
@@ -67,6 +69,7 @@ class SC2EnvWrapper:
         self.agent_obs = None
         self.global_obs = None
         self.unit_tags = np.zeros(self.mg_info["NUM_TOTAL"], dtype=np.int64)
+        self.num_crystals = self.mg_info["NUM_TOTAL"]
 
     def reset(self):
         """
@@ -75,6 +78,7 @@ class SC2EnvWrapper:
         :return: return the environments reset timestep
         """
         ts = self.env.reset()
+        self.num_crystals = self.mg_info["NUM_TOTAL"]
         return self.transform_env_info(ts)
 
     def transform_env_info(self, timestep):
@@ -168,9 +172,17 @@ class SC2EnvWrapper:
 
         self.global_obs, self.agent_obs = global_observations, agent_observations
 
+        reward = timestep[0].reward
+        num_crystals = global_idx_other - 1
+        if num_crystals > self.num_crystals:
+            print("CRYSTALS CLEARED")
+            reward += 1000
+            self.num_crystals = num_crystals
+
+
         return torch.from_numpy(agent_observations), \
                torch.from_numpy(global_observations.flatten()), \
-               torch.from_numpy(np.array(timestep[0].reward, dtype=np.float32)),\
+               torch.from_numpy(np.array(reward, dtype=np.float32)),\
                timestep[0].last()
 
     def step(self, action_indices):
@@ -213,8 +225,11 @@ class SC2EnvWrapper:
         """
         index = index - 2
         angle = 2. * np.pi * index / NUM_MOVE_ACTIONS
-        x = int(round(xy[0] + np.cos(angle) * 10))
-        y = int(round(xy[1] + np.sin(angle) * 10))
+        x = int(round(xy[0] + np.cos(angle) * 100))
+        y = int(round(xy[1] + np.sin(angle) * 100))
+
+        x = np.clip(x, 0, self.mg_info["X_MAP_SIZE"])
+        y = np.clip(y, 0, self.mg_info["y_MAP_SIZE"])
 
         point = common_pb.Point2D(x=x, y=y)
         return raw_pb.ActionRawUnitCommand(ability_id = 16,
