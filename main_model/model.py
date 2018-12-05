@@ -60,8 +60,8 @@ class Model(BaseModel):
         self.policy_arch = policy_arch
 
         # The buffer to hold all the information of an episode
-        self.buffer = Buffer(self.num_entries_per_update, self.seq_len, self.num_entries_per_update,
-                             self.n_agents, env.agent_obs_size, env.global_state_size, env.action_size)
+        self.buffer = Buffer(self.batch_size, self.seq_len, self.n_agents,
+                             env.agent_obs_size, env.global_state_size, env.action_size)
 
         # Create "placeholders" for incoming training data (Sorry, tensorflow habit)
         # joint-action state pairs
@@ -75,6 +75,8 @@ class Model(BaseModel):
 
         self.observations = torch.zeros(self.n_agents, self.batch_size, self.seq_len, self.obs_size).to(self.device)
         self.actions = torch.zeros(self.n_agents, self.batch_size, self.seq_len, self.action_size).to(self.device)
+
+        self.end_indices = torch.zeros(self.batch_size, dtype=torch.long)
 
         # sequence of immediate rewards
         self.reward_seq_pl = np.zeros((batch_size, seq_len))
@@ -117,12 +119,18 @@ class Model(BaseModel):
         self.experiment.log_multiple_params(self.policy_arch)
         self.experiment.log_multiple_params(self.critic_arch)
 
-    def get_critic_input(self, t=None):
-        if t is None:
+    def get_critic_input(self, start_end=None):
+        """
+        Get input for critic dependent on maac use
+        :param start_end: optional, tuple of start, end index for timestep slice, defaults to using all timesteps
+        """
+        if start_end is None:
             return (self.observations, self.actions) if self.use_maac else self.joint_action_state_pl
         else:
-            return (self.observations[:, :, t:t + 1, :], self.actions[:, :, t:t + 1, :]) if self.use_maac else \
-                   self.joint_action_state_pl[:, t]
+            s = start_end[0]
+            e = start_end[1]
+            return (self.observations[:, :, s:e, :], self.actions[:, :, s:e, :]) if self.use_maac else \
+                   self.joint_action_state_pl[:, s:e]
 
 
     def update_target_network(self):
@@ -143,10 +151,12 @@ class Model(BaseModel):
         # first get the Q value for the joint actions
         # print('q input', self.joint_action_state_pl[0, :, :])
 
-        q_vals = self.critic.forward(self.get_critic_input()).detach()
+        lt = torch.min(self.end_indices)  # last timestep to have data across all batches
+
+        q_vals = self.critic.forward(self.get_critic_input((0, lt))).detach()
 
         # print("q_vals", q_vals)
-        diff_action_in = self.actions if self.use_maac else self.joint_action_state_pl
+        diff_action_in = self.actions[:, :, :lt] if self.use_maac else self.joint_action_state_pl[:, :lt]
         diff_actions = torch.zeros_like(diff_action_in).to(self.device)
 
         # initialize the advantage for each agent, by copying the Q values
@@ -154,6 +164,7 @@ class Model(BaseModel):
             advantage = [q_vals[a].clone().detach() for a in range(self.n_agents)]
         else:
             advantage = [q_vals.clone().detach() for a in range(self.n_agents)]
+
 
 
         # Optimizer
@@ -165,14 +176,14 @@ class Model(BaseModel):
         # computing baselines, by broadcasting across rollouts and time-steps
         for a in range(self.n_agents):
             # get the dist over actions, based on each agent's observation, use the same epsilon during fitting?
-            pi = self.actor(self.actor_input_pl[a], a, eps=0)
+            pi = self.actor(self.actor_input_pl[a][:, :lt], a, eps=0)
 
             # make a copy of the joint-action, state, to substitute different actions in it
             diff_actions.copy_(diff_action_in)
 
             # get the chosen action for each agent
             action_index = a * self.action_size
-            chosen_action = self.joint_action_state_pl[:, :, action_index:action_index+self.action_size]
+            chosen_action = self.joint_action_state_pl[:, :lt, action_index:action_index+self.action_size]
 
             # compute the baseline for that agent, by substituting different actions in the joint action
             for u in range(self.action_size):
@@ -218,7 +229,7 @@ class Model(BaseModel):
 
             # compute the gradients of the policy network using the advantage
             # do not use optimizer.zero_grad() since we want to accumulate the gradients for all agents
-            loss.backward(torch.ones(self.batch_size, self.seq_len).to(self.device))
+            loss.backward(torch.ones(self.batch_size, lt).to(self.device))
 
         # after computing the gradient for all agents, perform a weight update on the policy network
         self.actor_optimizer.step()
@@ -227,66 +238,28 @@ class Model(BaseModel):
         self.actor.reset()
         return sum_loss / (self.n_agents)
 
-    def td_one(self):
-        """
-        updates the critic using td(1)
-        :return:
-        """
-
-        # create G with two columns, one for current prediction, second for one step lookahead
-        G = np.zeros((self.n_agents, self.batch_size, self.seq_len, 2))
-
-        # initialize the first column with estimates from the target Q network
-        predictions = self.target_critic.forward(self.get_critic_input()).squeeze()
-
-        # use detach to assign to numpy array
-        G[:, :, :, 0] = predictions.detach().cpu().numpy()
-
-        sum_loss = 0.
-        # by moving backwards, construct the G matrix
-        for t in range(self.seq_len - 1, -1, -1):
-            G[:, :, t, 1] = self.reward_seq_pl[:, t] + self.discount * G[:, :, t + 1, 0]
-
-            # if using soft actor critic, compute the joint action dist for the next time step
-            if self.SAC:
-                joint_action_dist = 1
-                for a in range(self.n_agents):
-                    joint_action_dist *= self.actor(self.actor_input_pl[a][:, t + 1, :], eps=0)
-                    G[:, :, t, 1] -= self.alpha * torch.sum(torch.log(joint_action_dist) * joint_action_dist, dim=-1)
-
-            pred = self.critic.forward(self.get_critic_input(t)).squeeze()
-
-            loss = torch.mean(torch.pow(G[:, :, t, 1] - pred, 2)) / self.seq_len
-            sum_loss += loss.item()
-            # print("critic loss", sum_loss)
-            # fit the Critic
-            self.critic_optimizer.zero_grad()
-            loss.backward()
-            self.critic_optimizer.step()
-
-        self.metrics["mean_critic_loss"] = sum_loss / self.seq_len
-        return sum_loss / self.seq_len
-
     def td_lambda(self):
         """
         Updates the critic using the off-line lambda return algorithm
         :return:
         """
         lam = self.lam
-        n_ahead = 5
+        n_ahead = 10
+
+        lt = torch.min(self.end_indices)
 
         # first compute the future discounted return at every step using the sequence of rewards
-        G = np.zeros((self.n_agents, self.batch_size, self.seq_len, n_ahead))
+        G = np.zeros((self.n_agents, self.batch_size, lt, n_ahead))
 
         # initialize the first column with estimates from the target Q network
         # predictions = self.target_critic(self.joint_action_state_pl).squeeze()
-        predictions = self.target_critic.forward(self.get_critic_input()).squeeze()
+        predictions = self.target_critic.forward(self.get_critic_input((0, lt))).squeeze()
 
         # use detach to assign to numpy array
         G[:, :, :, 0] = predictions.detach().cpu().numpy()
 
         # by moving backwards, construct the G matrix
-        for t in range(self.seq_len - n_ahead - 1, -1, -1):
+        for t in range(lt - n_ahead - 1, -1, -1):
 
             # loop from one-step lookahead to pure MC estimate
             # for n in range(1, n_ahead): #self.seq_len - 1):
@@ -308,7 +281,7 @@ class Model(BaseModel):
                 #     G[:, :, t, n] = self.reward_seq_pl[:, t] + self.discount*G[:, :, t+1, n-1]
 
         # compute target at timestep t
-        targets = torch.zeros((self.n_agents, self.batch_size, self.seq_len), dtype=torch.float32).to(self.device)
+        targets = torch.zeros((self.n_agents, self.batch_size, lt), dtype=torch.float32).to(self.device)
 
         sum_loss = 0.0
 
@@ -319,7 +292,7 @@ class Model(BaseModel):
         weights = weights / np.sum(weights)
 
         # by moving backwards except for the last transition, compute targets and update critic
-        for t in range(self.seq_len - n_ahead - 1, -1, -1):
+        for t in range(lt - n_ahead - 1, -1, -1):
 
             # print('t', t)
             targets[:, :, t] = torch.from_numpy(G[:, :, t, :].dot(weights)).to(self.device)
@@ -331,7 +304,7 @@ class Model(BaseModel):
                 targets[:, :, t] -= self.alpha * torch.sum(torch.log(joint_action_dist) * joint_action_dist, dim=-1)
 
             # print('target', targets[0, t])
-            pred = self.critic(self.get_critic_input(t)).squeeze()
+            pred = self.critic(self.get_critic_input((t, t + 1))).squeeze()
             # print('pred', pred[0])
 
             loss = torch.mean(torch.pow(targets[:, :, t] - pred, 2))
@@ -342,7 +315,7 @@ class Model(BaseModel):
             loss.backward(retain_graph=True)
             self.critic_optimizer.step()
 
-        return sum_loss / self.seq_len
+        return sum_loss / lt
 
     def format_buffer_data(self):
         """
@@ -355,6 +328,8 @@ class Model(BaseModel):
 
         self.observations[:, :, :, :] = self.buffer.next_agent_obs.permute(2, 0, 1, 3)
         self.actions[:, :, :, :] = self.buffer.actions.permute(2, 0, 1, 3)
+
+        self.end_indices[:] = self.buffer.end_index
 
         for n in range(self.n_agents):
             agent_idx = torch.zeros(self.batch_size, self.seq_len, self.n_agents)
@@ -426,7 +401,7 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 128, 'n_layers': 3}
 
     model = Model(flags, env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=20, seq_len=400, discount=0.8, lam=0.8, lr_critic=0.000001, lr_actor=0.0001)
+                  batch_size=20, seq_len=400, discount=0.7, lam=0.7, lr_critic=0.000001, lr_actor=0.0001)
 
     st = time.time()
 

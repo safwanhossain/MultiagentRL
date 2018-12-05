@@ -19,10 +19,13 @@ class SC2EnvWrapper:
 
     mini_games = {
         "DefeatRoaches": {
-            "NUM_ALLIES": 20,  # Used to determine input size to NN
+            "NUM_ALLIES": 9,  # Used to determine input size to NN
             "NUM_OTHERS": 4,  # Used to determine input size to NN
-            "NUM_TOTAL": 25,
-            "ACTION_SIZE": NUM_MOVE_ACTIONS + 4 # 2 +  #2 for noop and stop, NUM_MOVE_ACTIONS for movements, 4 to target enemies,
+            "NUM_TOTAL": 13,
+            "ACTION_SIZE": NUM_MOVE_ACTIONS + 4, # 2 +  #2 for noop and stop, NUM_MOVE_ACTIONS for movements, 4 to target enemies,
+            "X_MAP_SIZE": 63,  # Map size is 64x64, with indices between 0 and 63
+            "Y_MAP_SIZE": 63,
+            "COMBAT": True
         },
 
         "CollectMineralShards": {
@@ -31,16 +34,18 @@ class SC2EnvWrapper:
             "NUM_TOTAL": 22,
             "ACTION_SIZE": NUM_MOVE_ACTIONS, # 2 + , # 2 for noop and stop, NUM_MOVE_ACTIONS for movement
             "X_MAP_SIZE": 63, # Map size is 64x64, with indices between 0 and 63
-            "Y_MAP_SIZE": 63
+            "Y_MAP_SIZE": 63,
+            "COMBAT": False
         }
     }
 
     unit_type_mapping = {
         48: 1,
-        1680: 2
+        110: 2,
+        1680: 3
     }
 
-    def __init__(self, map, step_mul=8, visualize=True):
+    def __init__(self, map, step_mul=5, visualize=True):
         """
         :param map[string]: map to use
         :param agent_type[agent object type]: agent to use
@@ -60,8 +65,9 @@ class SC2EnvWrapper:
 
         self.n = self.mg_info["NUM_ALLIES"]
         self.action_size = self.mg_info["ACTION_SIZE"]
-        self.agent_obs_size = (self.mg_info["NUM_TOTAL"] - 1) * 4
-        self.global_state_size = self.mg_info["NUM_TOTAL"] * 3
+        self.obs_size = 6 if self.mg_info["COMBAT"] else 4
+        self.agent_obs_size = (self.mg_info["NUM_TOTAL"] - 1) * self.obs_size
+        self.global_state_size = self.mg_info["NUM_TOTAL"] * (self.obs_size - 1)
         self.env = sc2_env.SC2Env(map_name=self.map,
                    agent_interface_format=self.aif,
                    step_mul=self.step_mul,
@@ -98,7 +104,7 @@ class SC2EnvWrapper:
         """
         obs = timestep[0].observation
         agent_observations = np.zeros([self.mg_info["NUM_ALLIES"], self.agent_obs_size], dtype=np.float32)
-        global_observations = np.zeros([self.mg_info["NUM_TOTAL"], 3], dtype=np.float32)
+        global_observations = np.zeros([self.mg_info["NUM_TOTAL"], self.obs_size - 1], dtype=np.float32)
         # Get xy of all units
         raw_units = sorted(obs.raw_units, key=lambda u: u.tag)
         xy = np.array([[unit.x, unit.y] for unit in raw_units])
@@ -115,20 +121,24 @@ class SC2EnvWrapper:
 
             ut = SC2EnvWrapper.unit_type_mapping.get(unit.unit_type)
             if ut is None:
-                print("unit type mapping not found. Create unit mapping for unit type", unit.unit_type)
-                raise TypeError
+                raise TypeError("unit type mapping not found. Create unit mapping for unit type", unit.unit_type)
 
-            global_observations[gi] = [ut,
-                                       unit.x,
-                                       unit.y] #,
-                                       # unit.health,
-                                       # unit.shield]
+            if self.mg_info["COMBAT"]:
+                global_observations[gi] = [ut,
+                                           unit.x,
+                                           unit.y,
+                                           unit.health,
+                                           unit.shield]
+            else:
+                global_observations[gi] = [ut,
+                                           unit.x,
+                                           unit.y]
             self.unit_tags[gi] = unit.tag
 
             if unit.alliance != _PLAYER_SELF:
                 continue
 
-            agent_obs = np.zeros([self.mg_info["NUM_TOTAL"] - 1, 4])
+            agent_obs = np.zeros([self.mg_info["NUM_TOTAL"] - 1, self.obs_size])
             # precalculate all distances usig matrices
             xy_distances = [unit.x, unit.y] - xy
             distances = np.sqrt(np.sum(np.square(xy_distances), axis=1))
@@ -156,19 +166,20 @@ class SC2EnvWrapper:
                     print("unit type mapping not found. Create unit mapping for unit type", other_unit.unit_type)
                     raise TypeError
 
-                agent_obs[obs_idx] = [ut,
-                                      xy_distances[unit_idx][0],
-                                      xy_distances[unit_idx][1],
-                                      distances[unit_idx]]#,
-                                      # other_unit.health,
-                                      # other_unit.shield]
-            #
-            # agent_obs[:, 4:] -=  np.mean(agent_obs[4:], axis=0, keepdims=True)
-            # agent_obs[:, 4:] /= (np.std(agent_obs[4:], axis=0, keepdims=True) + 1e-8)
+                if self.mg_info["COMBAT"]:
+                    agent_obs[obs_idx] = [ut,
+                                          xy_distances[unit_idx][0],
+                                          xy_distances[unit_idx][1],
+                                          distances[unit_idx],
+                                          other_unit.health,
+                                          other_unit.shield]
+                else:
+                    agent_obs[obs_idx] = [ut,
+                                          xy_distances[unit_idx][0],
+                                          xy_distances[unit_idx][1],
+                                          distances[unit_idx]]
+
             agent_observations[global_idx_self - 1] = agent_obs.flatten()
-        #
-        # global_observations[:, 3:] -= np.mean(global_observations[3:], axis=0, keepdims=True)
-        # global_observations[:, 3:] /= (np.std(global_observations[3:], axis=0, keepdims=True) + 1e-8)
 
         self.global_obs, self.agent_obs = global_observations, agent_observations
 
@@ -246,9 +257,9 @@ class SC2EnvWrapper:
         :return: attack action
         """
         target_idx = self.mg_info["NUM_ALLIES"] + (index - NUM_MOVE_ACTIONS - 1)
-        target_xy = (self.global_obs[target_idx].x, self.global_obs[target_idx].y)
+        target_xy = (self.global_obs[target_idx][1], self.global_obs[target_idx][2])
         # Out of Marine range see https://liquipedia.net/starcraft2/Marine_(Legacy_of_the_Void)
-        if np.sqrt(np.sum(np.square(xy - target_xy)), axis=1) > 5:
+        if np.sqrt(np.sum(np.square(np.subtract(xy, target_xy)))) > 5:
             return None
         target_tag = self.unit_tags[target_idx]
         return raw_pb.ActionRawUnitCommand(ability_id = 23,

@@ -5,7 +5,7 @@ import multiprocessing
 
 class BaseModel:
 
-    def __init__(self, use_gpu=True, track_results=True):
+    def __init__(self, use_gpu=True, track_results=False):
         """
         Initializes comet tracking and cuda gpu
         """
@@ -65,7 +65,7 @@ class BaseModel:
         """
         count = 0
         rewards = []
-        while count < self.num_entries_per_update:
+        for b in range(self.batch_size):
             # initialize action to noop
             actions = torch.zeros(self.n_agents, self.env.action_size)
             actions[:, 0] = 1
@@ -77,13 +77,14 @@ class BaseModel:
                 # TODO add parallelism
                 next_agent_obs, next_global_state, reward, end_signal = self.env.step(actions)
 
-                self.buffer.add_to_buffer(t, curr_agent_obs, next_agent_obs, curr_global_state, next_global_state,
+                self.buffer.add_to_buffer(b, t, curr_agent_obs, next_agent_obs, curr_global_state, next_global_state,
                                            actions, reward)
                 curr_agent_obs, curr_global_state = next_agent_obs, next_global_state
                 rewards.append(reward)
 
                 if end_signal:
-                    print("HIT RESET")
+                    # self.buffer.set_end_index(b, t)
+                    # # print("HIT RESET", t)
                     break
 
                 # for each agent, save observation, compute next action
@@ -93,8 +94,7 @@ class BaseModel:
                     # sample action from pi, convert to one-hot vector
                     action_idx = (torch.multinomial(pi, num_samples=1))
                     actions[n, :] = torch.zeros(self.action_size).scatter(0, action_idx, 1)
-
-            count += self.seq_len
+            self.buffer.set_end_index(b, t)
 
         print("Mean reward for this batch: {0:5.3}".format(np.mean(rewards)))
         return np.sum(rewards)
