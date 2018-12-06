@@ -426,6 +426,11 @@ if __name__ == "__main__":
     policy_arch = {'type': MLPActor, 'h_size': 128}
     critic_arch = {'h_size': 128, 'n_layers':2}
 
+    # Files to log the stats - allows us to compare various models
+    reward_file = "reward.csv"
+    critic_loss_files = ["critic_loss_"+str(i)+".csv" for i in range(flags.num_agents)]
+    agent_loss_files = ["agent_loss_"+str(i)+".csv" for i in range(flags.num_agents)]
+
     model = Model(flags, envs=envs, critic_arch=critic_arch, policy_arch=policy_arch,
                   batch_size=30, seq_len=80, discount=0.9, lam=0.8, lr_critic=0.0002, lr_actor=0.0001)
 
