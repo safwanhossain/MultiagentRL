@@ -53,7 +53,7 @@ class Model(BaseModel):
         self.env = env
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
-        self.epochs = 10
+        self.epochs = 500
         self.num_updates = 1
         self.num_entries_per_update = self.batch_size * self.seq_len
 

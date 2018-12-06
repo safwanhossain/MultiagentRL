@@ -104,6 +104,7 @@ class SC2EnvWrapper:
         """
         obs = timestep[0].observation
         reward = timestep[0].reward
+        true_reward = timestep[0].reward
         agent_observations = np.zeros([self.mg_info["NUM_ALLIES"], self.agent_obs_size], dtype=np.float32)
         global_observations = np.zeros([self.mg_info["NUM_TOTAL"], self.obs_size - 1], dtype=np.float32)
 
@@ -197,7 +198,7 @@ class SC2EnvWrapper:
             reward += 100
             self.num_crystals = num_crystals
 
-        reward += min_distances / 1000.
+        reward -= min_distances / 1000.
 
         if self.mg_info["COMBAT"]:
             hp_diff = np.sum(global_observations[:self.mg_info["NUM_ALLIES"], 3]) - \
@@ -208,6 +209,7 @@ class SC2EnvWrapper:
         return torch.from_numpy(agent_observations), \
                torch.from_numpy(global_observations.flatten()), \
                torch.from_numpy(np.array(reward, dtype=np.float32)),\
+               true_reward,\
                timestep[0].last()
 
     def step(self, action_indices):

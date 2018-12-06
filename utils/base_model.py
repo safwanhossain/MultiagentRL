@@ -64,22 +64,24 @@ class BaseModel:
         Fills data buffer with (o, o', s, s', a, r) tuples generated from simulating environment
         """
         rewards = []
+        true_rewards = []
         for b in range(self.batch_size):
             # initialize action to noop
             actions = torch.zeros(self.n_agents, self.env.action_size)
             actions[:, 0] = 1
             # np.random.seed()
-            curr_agent_obs, curr_global_state, reward, _ = self.env.reset()
+            curr_agent_obs, curr_global_state, reward, true_reward, _ = self.env.reset()
 
             for t in range(self.seq_len):
                 # get observations, by executing current action
                 # TODO add parallelism
-                next_agent_obs, next_global_state, reward, end_signal = self.env.step(actions)
+                next_agent_obs, next_global_state, reward, true_reward, end_signal = self.env.step(actions)
 
                 self.buffer.add_to_buffer(b, t, curr_agent_obs, next_agent_obs, curr_global_state, next_global_state,
                                            actions, reward)
                 curr_agent_obs, curr_global_state = next_agent_obs, next_global_state
                 rewards.append(reward)
+                true_rewards.append(true_reward)
 
                 if end_signal:
                     # self.buffer.set_end_index(b, t)
@@ -96,7 +98,7 @@ class BaseModel:
             self.buffer.set_end_index(b, t)
 
         print("Mean reward for this batch: {0:5.3}".format(np.mean(rewards)))
-        return np.sum(rewards) / float(self.batch_size)
+        return (np.sum(rewards) / float(self.batch_size), np.sum(true_rewards) / float(self.batch_size))
 
     def train(self):
         """
@@ -105,7 +107,7 @@ class BaseModel:
         metrics = {}
         for e in range(self.epochs):
             eps = 0. if self.SAC else max(0.01, 0.15 - 0.15*e/self.epochs)
-            metrics["Reward"] = self.gather_batch(eps=eps)
+            metrics["Reward"], metrics["True Reward"] = self.gather_batch(eps=eps)
             metrics["Critic Loss"], metrics["Actor Loss"] = self.update(e)
              # self.evaluate()
 
