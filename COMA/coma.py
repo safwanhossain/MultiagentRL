@@ -266,6 +266,7 @@ class COMA(BaseModel):
         :return:
         """
 
+        self.reset_agents()
         # create G with two columns, one for current prediction, second for one step lookahead
         G = np.zeros((self.batch_size, self.seq_len, 2))
 
@@ -309,6 +310,7 @@ class COMA(BaseModel):
         :return:
         """
         lam = self.lam
+        self.reset_agents()
 
         # first compute the future discounted return at every step using the sequence of rewards
         G = np.zeros((self.batch_size, self.seq_len, self.seq_len))
@@ -356,7 +358,7 @@ class COMA(BaseModel):
                 joint_action_dist = 1
                 for a in range(self.n_agents):
                     joint_action_dist *= self.agents[a].get_action_dist(self.actor_input_pl[a][:, t+1, :], eps=0)
-                targets[:, t] -= self.alpha*torch.sum(torch.log(joint_action_dist) * joint_action_dist, dim=-1)
+                targets[:, t] -= self.alpha*torch.sum(torch.log(joint_action_dist) * joint_action_dist, dim=-1).squeeze()
 
             #print('target', targets[0, t])
             pred = self.critic.forward(self.joint_action_state_pl[:, t]).squeeze()

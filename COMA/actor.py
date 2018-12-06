@@ -49,7 +49,7 @@ class GRUAgent(Agent):
         action_dist, state = self.actor_net.forward(actor_input, eps, self.h_state)
         self.h_state = state
 
-        action_idx = (torch.multinomial(action_dist[0, 0, :], num_samples=1)).numpy()
+        action_idx = (torch.multinomial(action_dist[0, 0, :], num_samples=1)).cpu().numpy()
         action = torch.zeros(self.actor_net.action_size)
         action[action_idx] = 1
         return action
@@ -127,10 +127,10 @@ class GRUActor(torch.nn.Module):
         # initial state, shape (num_layers * num_directions, batch, hidden_size)
 
         if h_state is None:
-            h_state = torch.zeros(1, batch_size, self.h_size)
+            h_state = torch.zeros(1, batch_size, self.h_size).to(self.device)
 
         # output has shape [batch, seq_len, h_size]
-        output, h_state = self.actor_gru(obs_seq, h_state)
+        output, h_state = self.actor_gru(obs_seq.view(batch_size, -1, self.input_size), h_state)
         logits = self.linear(output)
 
         # compute eps-bounded softmax

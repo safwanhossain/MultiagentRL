@@ -113,7 +113,7 @@ if __name__ == "__main__":
 
     env = marl_env.make_env('simple_spread', n_agents=n)
 
-    policy_arch = {'type': MLPActor, 'h_size': 128}
+    policy_arch = {'type': GRUActor, 'h_size': 128}
     critic_arch = {'h_size': 128, 'n_layers': 2}
 
     # FLAGS:
