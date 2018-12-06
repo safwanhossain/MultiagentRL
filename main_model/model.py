@@ -88,9 +88,9 @@ class Model(BaseModel):
         # actor takes in agent index as well
         self.actor = ActorType(input_size=self.obs_size + self.action_size + self.n_agents,
                                h_size=policy_arch['h_size'],
-                               action_size = self.action_size,
+                               action_size=self.action_size,
                                device=self.device,
-                               n_agents = self.n_agents)
+                               n_agents=self.n_agents)
         self.actor_optimizer = torch.optim.RMSprop(self.actor.parameters(), lr=self.lr_actor, eps=1e-08)
 
         if self.use_maac:
@@ -256,7 +256,7 @@ class Model(BaseModel):
         :return:
         """
         lam = self.lam
-        n_ahead = 10
+        n_ahead = 5
 
         lt = torch.min(self.end_indices)
 
@@ -418,7 +418,7 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 128, 'n_layers': 3}
 
     model = Model(flags, env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=20, seq_len=400, discount=0.7, lam=0.7, lr_critic=0.0000001, lr_actor=0.00001)
+                  batch_size=20, seq_len=400, discount=0.7, lam=0.7, lr_critic=0.0000002, lr_actor=0.0001)
 
     if flags.load_key is not None:
         model.load_model(flags.load_key)

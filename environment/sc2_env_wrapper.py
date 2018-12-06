@@ -198,7 +198,7 @@ class SC2EnvWrapper:
             reward += 100
             self.num_crystals = num_crystals
 
-        reward -= min_distances / 1000.
+        reward -= min_distances / 5000.
 
         if self.mg_info["COMBAT"]:
             hp_diff = np.sum(global_observations[:self.mg_info["NUM_ALLIES"], 3]) - \
