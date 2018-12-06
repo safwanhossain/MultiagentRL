@@ -418,7 +418,7 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 128, 'n_layers': 3}
 
     model = Model(flags, env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=30, seq_len=400, discount=0.7, lam=0.7, lr_critic=0.000001, lr_actor=0.0001)
+                  batch_size=20, seq_len=400, discount=0.7, lam=0.7, lr_critic=0.0000001, lr_actor=0.00001)
 
     if flags.load_key is not None:
         model.load_model(flags.load_key)

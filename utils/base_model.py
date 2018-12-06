@@ -63,7 +63,6 @@ class BaseModel:
         """
         Fills data buffer with (o, o', s, s', a, r) tuples generated from simulating environment
         """
-        count = 0
         rewards = []
         for b in range(self.batch_size):
             # initialize action to noop
@@ -84,7 +83,7 @@ class BaseModel:
 
                 if end_signal:
                     # self.buffer.set_end_index(b, t)
-                    # # print("HIT RESET", t)
+                    print("HIT RESET", t)
                     break
 
                 # for each agent, save observation, compute next action
@@ -97,7 +96,7 @@ class BaseModel:
             self.buffer.set_end_index(b, t)
 
         print("Mean reward for this batch: {0:5.3}".format(np.mean(rewards)))
-        return np.sum(rewards)
+        return np.sum(rewards) / float(self.batch_size)
 
     def train(self):
         """

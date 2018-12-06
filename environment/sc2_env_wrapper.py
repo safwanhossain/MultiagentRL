@@ -103,11 +103,14 @@ class SC2EnvWrapper:
         :return: individual agent observations and global observations for the critic
         """
         obs = timestep[0].observation
+        reward = timestep[0].reward
         agent_observations = np.zeros([self.mg_info["NUM_ALLIES"], self.agent_obs_size], dtype=np.float32)
         global_observations = np.zeros([self.mg_info["NUM_TOTAL"], self.obs_size - 1], dtype=np.float32)
+
         # Get xy of all units
         raw_units = sorted(obs.raw_units, key=lambda u: u.tag)
         xy = np.array([[unit.x, unit.y] for unit in raw_units])
+        min_distances = 0.
 
         global_idx_self = 0
         global_idx_other = self.mg_info["NUM_ALLIES"]
@@ -142,6 +145,7 @@ class SC2EnvWrapper:
             # precalculate all distances usig matrices
             xy_distances = [unit.x, unit.y] - xy
             distances = np.sqrt(np.sum(np.square(xy_distances), axis=1))
+            min_d = 1000.
             # setup indexing
             obs_self_idx = 0
             obs_enemy_idx = self.mg_info["NUM_ALLIES"] - 1
@@ -157,6 +161,8 @@ class SC2EnvWrapper:
                 if other_unit.alliance != _PLAYER_SELF:
                     obs_idx = obs_enemy_idx
                     obs_enemy_idx += 1
+                    if distances[unit_idx] < min_d:
+                        min_d = distances[unit_idx]
                 else:
                     obs_idx = obs_self_idx
                     obs_self_idx += 1
@@ -179,16 +185,24 @@ class SC2EnvWrapper:
                                           xy_distances[unit_idx][1],
                                           distances[unit_idx]]
 
+            min_distances += min_d
             agent_observations[global_idx_self - 1] = agent_obs.flatten()
 
         self.global_obs, self.agent_obs = global_observations, agent_observations
 
-        reward = timestep[0].reward
+        # REWARD SHAPING
         num_crystals = global_idx_other - 1
         if num_crystals > self.num_crystals:
-            print("CRYSTALS CLEARED")
-            reward += 10
+            print("STAGE CLEARED")
+            reward += 100
             self.num_crystals = num_crystals
+
+        reward += min_distances / 1000.
+
+        if self.mg_info["COMBAT"]:
+            hp_diff = np.sum(global_observations[:self.mg_info["NUM_ALLIES"], 3]) - \
+                      np.sum(global_observations[self.mg_info["NUM_ALLIES"]:, 3])
+            reward += hp_diff
 
 
         return torch.from_numpy(agent_observations), \
