@@ -82,8 +82,8 @@ class Critic(nn.Module):
         observation_vector = observation_action_vector[0]
         action_vector = observation_action_vector[1]
         out_shape = observation_vector.shape[1:3]
-        assert (observation_vector.shape == (self.num_agents, *out_shape, self.observation_size))
-        assert (action_vector.shape == (self.num_agents, *out_shape, self.action_size))
+        # assert (observation_vector.shape == (self.num_agents, *out_shape, self.observation_size))
+        # assert (action_vector.shape == (self.num_agents, *out_shape, self.action_size))
 
         # First compute the embedding
         ei_s = []

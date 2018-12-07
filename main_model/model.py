@@ -53,7 +53,7 @@ class Model(BaseModel):
         self.env = env
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
-        self.epochs = 100
+        self.epochs = 300
         self.num_updates = 1
         self.num_entries_per_update = self.batch_size * self.seq_len
 
@@ -126,11 +126,11 @@ class Model(BaseModel):
         self.target_critic.load_state_dict(torch.load("saved_models/" + key + "_critic.pt"))
         print("Model loaded using key", key)
 
-    def save_model(self):
+    def save_model(self, epoch):
         if not os.path.exists("saved_models/"):
             os.makedirs("saved_models/")
-        torch.save(self.critic.state_dict(), "saved_models/" + self.experiment.get_key() + "_critic.pt")
-        torch.save(self.actor.state_dict(), "saved_models/" + self.experiment.get_key() + "_actor.pt")
+        torch.save(self.critic.state_dict(), "saved_models/" + self.experiment.get_key() + "_" + str(epoch) + "_critic.pt")
+        torch.save(self.actor.state_dict(), "saved_models/" + self.experiment.get_key() + "_" + str(epoch) + "_actor.pt")
         print("Model saved to key", self.experiment.get_key())
 
     def get_critic_input(self, start_end=None):
@@ -165,7 +165,7 @@ class Model(BaseModel):
         # first get the Q value for the joint actions
         # print('q input', self.joint_action_state_pl[0, :, :])
 
-        lt = torch.min(self.end_indices)  # last timestep to have data across all batches
+        lt = self.seq_len #torch.min(self.end_indices)  # last timestep to have data across all batches
 
         q_vals = self.critic.forward(self.get_critic_input((0, lt))).detach()
 
@@ -260,7 +260,7 @@ class Model(BaseModel):
         lam = self.lam
         n_ahead = 25
 
-        lt = torch.min(self.end_indices)
+        lt = self.seq_len #torch.min(self.end_indices)
 
         # first compute the future discounted return at every step using the sequence of rewards
         G = np.zeros((self.n_agents, self.batch_size, lt, n_ahead))
@@ -390,7 +390,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu', default='True',
                         help='use GPU if True, CPU if False [default: True]')
-    parser.add_argument('--maac', default='False',
+    parser.add_argument('--maac', default='True',
                         help='Whether to use maac critic or not [default: True]')
     parser.add_argument('--SAC', default='True',
                         help='Whether to use SAC or not [default: True]')
@@ -398,7 +398,7 @@ if __name__ == "__main__":
                         help='Whether to track results on comet or not [default: True]')
     parser.add_argument('--num_agents', type=int, default=2,
                         help='Number of agents in particle environment [default: 3]')
-    parser.add_argument('--env', default="particle",
+    parser.add_argument('--env', default="sc2",
                         help='Environment to run ("sc2" or "particle" [default: particle]')
     parser.add_argument('--evaluate', default="False",
                         help='If True, load previously trained model and evaluate [default: False]')
@@ -422,7 +422,7 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 128, 'n_layers': 2}
 
     model = Model(flags, env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=30, seq_len=80, discount=0.7, lam=0.7, lr_critic=0.000001, lr_actor=0.0001)
+                  batch_size=30, seq_len=400, discount=0.7, lam=0.7, lr_critic=0.0002, lr_actor=0.0001)
 
     if flags.env == "particle":
         env.seq_len = model.seq_len
@@ -436,7 +436,7 @@ if __name__ == "__main__":
         model.evaluate()
     else:
         model.train()
-        model.save_model()
+        model.save_model("final")
         print("Time taken for {0:d} epochs {1:10.4f}".format(model.epochs, time.time() - st))
 
     if flags.env =="particle":

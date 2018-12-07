@@ -115,3 +115,7 @@ class BaseModel:
 
             self.experiment.log_multiple_metrics(metrics, step=e+1)
 
+            if e % 25 == 0:
+                self.save_model(e)
+
+
