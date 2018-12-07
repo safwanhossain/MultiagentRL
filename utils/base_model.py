@@ -2,10 +2,11 @@ from comet_ml import Experiment
 import torch
 import numpy as np
 import multiprocessing
+import csv
 
 class BaseModel:
 
-    def __init__(self, use_gpu=True, track_results=True):
+    def __init__(self, use_gpu=True, track_results=True, log_files=None):
         """
         Initializes comet tracking and cuda gpu
         """
@@ -15,9 +16,16 @@ class BaseModel:
                                      auto_param_logging=False, auto_metric_logging=False,
                                      disabled=(not track_results))
         self.use_gpu = use_gpu
-
         self.device = torch.device('cuda:0' if torch.cuda.is_available() and use_gpu else 'cpu')
         self.params = {}
+        
+        # This is for logging to a csv file. Since logging can be expensive, we will maintain
+        # relevant info in a buffer and empty the buffer into the file after a number of episodes
+        self.reward_dict = {}
+        self.critic_loss_dict = {}
+        self.agent_loss_dict = {}
+        if log_files != None:
+            self.reward_file, self.critic_loss_file, self.agent_loss_file = log_files
 
     def set_params(self):
         """
@@ -104,6 +112,25 @@ class BaseModel:
         print("Mean reward for this batch: {0:5.3}".format(np.mean(rewards)))
         return np.mean(rewards)
 
+    def log_values_to_file(self):
+        with open(self.reward_file, 'w', newline='') as reward_csv:
+            writer = csv.writer(reward_csv)
+            for e, reward in self.reward_dict.items():
+                writer.writerow(["Episode", e, "Reward", reward])
+        self.reward_dict = {} 
+        
+        with open(self.critic_loss_file, 'w', newline='') as critic_csv:
+            writer = csv.writer(critic_csv)
+            for e, c_loss in self.critic_loss_dict.items():
+                writer.writerow(["Episode", e, "Critic loss", c_loss])
+        self.critic_loss_dict = {} 
+
+        with open(self.agent_loss_file, 'w', newline='') as actor_csv:
+            writer = csv.writer(actor_csv)
+            for e, a_loss in self.agent_loss_dict.items():
+                writer.writerow(["Episode", e, "Actor loss", a_loss])
+        self.actor_reward_dict = {} 
+
     def train(self):
         """
         Train model
@@ -113,8 +140,16 @@ class BaseModel:
             eps = 0 if self.SAC else max(0.01, 0.15 - 0.15*e/self.epochs)
             metrics["Reward"] = self.gather_batch(eps=eps)
             metrics["Critic Loss"], metrics["Actor Loss"] = self.update(e)
-             # self.evaluate()
+            
+            self.reward_dict[e] = metrics["Reward"]
+            self.critic_loss_dict[e] = metrics["Critic Loss"]
+            self.agent_loss_dict[e] = metrics["Actor Loss"]
+            
+            # self.evaluate()
 
             self.experiment.log_multiple_metrics(metrics)
             self.experiment.set_step(e)
+            
+            if e % 100:
+                self.log_values_to_file()
 

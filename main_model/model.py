@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 import sys
 sys.path.append('../')
+
 import argparse
 from utils.base_model import BaseModel
 from actors import GRUActor, MLPActor
@@ -27,7 +28,7 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
 class Model(BaseModel):
 
     def __init__(self, flags, envs, critic_arch, policy_arch, batch_size, seq_len, discount, lam,
-                 lr_critic=0.0001, lr_actor=0.0001):
+                 lr_critic=0.0001, lr_actor=0.0001, log_files=None):
         """
         Initialize all aspects of the model
         :param env: Environment model will be used in
@@ -39,7 +40,7 @@ class Model(BaseModel):
         """
         use_gpu = flags.gpu.lower() in ["true", "t", "yes", "y"]
         track_results = flags.track_results.lower() in ["true", "t", "yes", "y"]
-        super(Model, self).__init__(use_gpu=use_gpu, track_results=track_results)
+        super(Model, self).__init__(use_gpu=use_gpu, track_results=track_results, log_files=log_files)
         self.use_maac = flags.maac.lower() in ["true", "t", "yes", "y"]
         self.SAC = flags.SAC.lower() in ["true", "t", "yes", "y"]
         self.batch_size = batch_size
@@ -58,7 +59,7 @@ class Model(BaseModel):
         self.epochs = 10000
         self.num_updates = 1
         self.num_entries_per_update = self.batch_size * self.seq_len
-
+        
         self.critic_arch = critic_arch
         self.policy_arch = policy_arch
 
@@ -428,11 +429,12 @@ if __name__ == "__main__":
 
     # Files to log the stats - allows us to compare various models
     reward_file = "reward.csv"
-    critic_loss_files = ["critic_loss_"+str(i)+".csv" for i in range(flags.num_agents)]
-    agent_loss_files = ["agent_loss_"+str(i)+".csv" for i in range(flags.num_agents)]
+    critic_loss_file = "critic_loss.csv"
+    agent_loss_file = "agent_loss.csv"
 
     model = Model(flags, envs=envs, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=30, seq_len=80, discount=0.9, lam=0.8, lr_critic=0.0002, lr_actor=0.0001)
+                  batch_size=30, seq_len=80, discount=0.9, lam=0.8, lr_critic=0.0002, 
+                  lr_actor=0.0001, log_files=[reward_file, critic_loss_file, agent_loss_file])
 
     st = time.time()
 
