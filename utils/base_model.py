@@ -113,19 +113,19 @@ class BaseModel:
         return np.mean(rewards)
 
     def log_values_to_file(self):
-        with open(self.reward_file, 'w', newline='') as reward_csv:
+        with open(self.reward_file, 'a', newline='') as reward_csv:
             writer = csv.writer(reward_csv)
             for e, reward in self.reward_dict.items():
                 writer.writerow(["Episode", e, "Reward", reward])
         self.reward_dict = {} 
         
-        with open(self.critic_loss_file, 'w', newline='') as critic_csv:
+        with open(self.critic_loss_file, 'a', newline='') as critic_csv:
             writer = csv.writer(critic_csv)
             for e, c_loss in self.critic_loss_dict.items():
                 writer.writerow(["Episode", e, "Critic loss", c_loss])
         self.critic_loss_dict = {} 
 
-        with open(self.agent_loss_file, 'w', newline='') as actor_csv:
+        with open(self.agent_loss_file, 'a', newline='') as actor_csv:
             writer = csv.writer(actor_csv)
             for e, a_loss in self.agent_loss_dict.items():
                 writer.writerow(["Episode", e, "Actor loss", a_loss])
@@ -150,6 +150,6 @@ class BaseModel:
             self.experiment.log_multiple_metrics(metrics)
             self.experiment.set_step(e)
             
-            if e % 100:
+            if (e % 50) == 0:
                 self.log_values_to_file()
 
