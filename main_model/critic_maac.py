@@ -60,7 +60,7 @@ class Critic(nn.Module):
             self.Wq_layers.append(nn.Linear(self.embedding_dim, self.attend_dim, bias=False))
             self.Wk_layers.append(nn.Linear(self.embedding_dim, self.attend_dim, bias=False))
             self.V_layers.append(nn.Linear(self.embedding_dim, self.attend_dim, bias=False))
-        self.weight_init(mean=0.0, std=0.02)
+        self.weight_init(mean=0.0, std=0.00001)
 
         self.to(self.device)
     

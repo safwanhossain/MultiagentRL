@@ -49,7 +49,7 @@ class Model(BaseModel):
         self.action_size = env.action_size
         self.obs_size = env.agent_obs_size
         self.state_size = env.global_state_size
-        self.alpha = 0.1
+        self.alpha = 0.3
         self.env = env
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
@@ -120,10 +120,12 @@ class Model(BaseModel):
         self.experiment.log_multiple_params(self.policy_arch)
         self.experiment.log_multiple_params(self.critic_arch)
 
-    def load_model(self, key):
-        self.critic.load_state_dict(torch.load("saved_models/" + key + "_critic.pt"))
-        self.actor.load_state_dict(torch.load("saved_models/" + key + "_actor.pt"))
-        self.target_critic.load_state_dict(torch.load("saved_models/" + key + "_critic.pt"))
+    def load_model(self, key, epoch):
+        key = str(key)
+        epoch = str(epoch)
+        self.critic.load_state_dict(torch.load("saved_models/" + key + "_" + epoch + "_critic.pt"))
+        self.actor.load_state_dict(torch.load("saved_models/" + key + "_" + epoch +  "_actor.pt"))
+        self.target_critic.load_state_dict(torch.load("saved_models/" + key + "_" + epoch + "_critic.pt"))
         print("Model loaded using key", key)
 
     def save_model(self, epoch):
@@ -422,13 +424,13 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 128, 'n_layers': 2}
 
     model = Model(flags, env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=30, seq_len=400, discount=0.7, lam=0.7, lr_critic=0.0002, lr_actor=0.0001)
+                  batch_size=20, seq_len=383, discount=0.8, lam=0.8, lr_critic=0.00002, lr_actor=0.00001)
 
     if flags.env == "particle":
         env.seq_len = model.seq_len
 
     if flags.load_key is not None:
-        model.load_model(flags.load_key)
+        model.load_model(flags.load_key, 150)
 
     st = time.time()
 

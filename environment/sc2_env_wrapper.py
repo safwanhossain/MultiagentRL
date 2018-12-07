@@ -152,9 +152,6 @@ class SC2EnvWrapper:
             obs_enemy_idx = self.mg_info["NUM_ALLIES"] - 1
 
             for unit_idx, other_unit in enumerate(raw_units):
-                # Only consider units within vision
-                if distances[unit_idx] > 9: # taken from https://liquipedia.net/starcraft2/Sight for marine sight
-                    continue
                 # Ignore own unit
                 if unit is other_unit:
                     continue
@@ -167,6 +164,10 @@ class SC2EnvWrapper:
                 else:
                     obs_idx = obs_self_idx
                     obs_self_idx += 1
+
+                # Only consider units within vision
+                if distances[unit_idx] > 9:  # taken from https://liquipedia.net/starcraft2/Sight for marine sight
+                    continue
 
                 ut = SC2EnvWrapper.unit_type_mapping.get(other_unit.unit_type)
                 if ut is None:
@@ -195,15 +196,14 @@ class SC2EnvWrapper:
         num_others = global_idx_other - 1
         if num_others > self.num_others:
             print("STAGE CLEARED")
-            reward += 100
+            reward += 10
         self.num_others = num_others
 
-        reward -= min_distances / 5000.
+        reward -= min_distances / ((global_idx_self + 1) * 5000.)
 
         if self.mg_info["COMBAT"]:
-            hp_diff = np.sum(global_observations[:self.mg_info["NUM_ALLIES"], 3]) - \
-                      np.sum(global_observations[self.mg_info["NUM_ALLIES"]:, 3])
-            reward += hp_diff / 10000.
+            hp_diff = 580 - np.sum(global_observations[self.mg_info["NUM_ALLIES"]:, 3])  # 580 = roach hp (145) * 4
+            reward += hp_diff / 100.
 
 
         return torch.from_numpy(agent_observations), \

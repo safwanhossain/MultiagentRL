@@ -58,8 +58,8 @@ class BaseModel:
                 action_idx = (torch.multinomial(pi, num_samples=1))
                 actions[n, :] = torch.zeros(self.action_size).scatter(0, action_idx, 1)
 
-        print("Mean reward for this batch: {0:5.3}".format(np.sum(true_rewards) / float(self.batch_size)))
-        return (np.sum(rewards) / float(self.batch_size), np.sum(true_rewards) / float(self.batch_size))
+        print("Mean reward for this batch: {0:5}".format(np.sum(true_rewards)))
+        return (np.sum(rewards) / float(self.batch_size), np.sum(true_rewards))
 
     def gather_batch(self, eps):
         """
