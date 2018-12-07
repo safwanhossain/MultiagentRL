@@ -37,7 +37,7 @@ class Model(BaseModel):
         :param h_size: size of GRU state
         """
         use_gpu = flags.gpu.lower() in ["true", "t", "yes", "y"]
-        track_results = flags.track_results.lower() in ["true", "t", "yes", "y"]
+        track_results = flags.track_results
         super(Model, self).__init__(use_gpu=use_gpu, track_results=track_results)
         self.use_maac = flags.maac.lower() in ["true", "t", "yes", "y"]
         self.SAC = flags.SAC.lower() in ["true", "t", "yes", "y"]
@@ -53,7 +53,7 @@ class Model(BaseModel):
         self.env = env
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
-        self.epochs = 500
+        self.epochs = 100
         self.num_updates = 1
         self.num_entries_per_update = self.batch_size * self.seq_len
 
@@ -121,8 +121,9 @@ class Model(BaseModel):
         self.experiment.log_multiple_params(self.critic_arch)
 
     def load_model(self, key):
-        self.critic = torch.load("saved_models/" + key + "_critic.pt")
-        self.actor = torch.load("saved_models/" + key + "_actor.pt")
+        self.critic.load_state_dict(torch.load("saved_models/" + key + "_critic.pt"))
+        self.actor.load_state_dict(torch.load("saved_models/" + key + "_actor.pt"))
+        self.target_critic.load_state_dict(torch.load("saved_models/" + key + "_critic.pt"))
         print("Model loaded using key", key)
 
     def save_model(self):
@@ -130,6 +131,7 @@ class Model(BaseModel):
             os.makedirs("saved_models/")
         torch.save(self.critic.state_dict(), "saved_models/" + self.experiment.get_key() + "_critic.pt")
         torch.save(self.actor.state_dict(), "saved_models/" + self.experiment.get_key() + "_actor.pt")
+        print("Model saved to key", self.experiment.get_key())
 
     def get_critic_input(self, start_end=None):
         """
@@ -256,7 +258,7 @@ class Model(BaseModel):
         :return:
         """
         lam = self.lam
-        n_ahead = 5
+        n_ahead = 25
 
         lt = torch.min(self.end_indices)
 
@@ -319,7 +321,7 @@ class Model(BaseModel):
             pred = self.critic(self.get_critic_input((t, t + 1))).squeeze()
             # print('pred', pred[0])
 
-            loss = torch.mean(torch.pow(targets[:, :, t] - pred, 2))
+            loss = torch.mean(torch.pow(targets[:, :, t] - pred, 2)) / float(lt)
             sum_loss += loss.item()
             # print("critic loss", sum_loss)
             # fit the Critic
@@ -327,7 +329,7 @@ class Model(BaseModel):
             loss.backward(retain_graph=True)
             self.critic_optimizer.step()
 
-        return sum_loss / lt.float()
+        return sum_loss #/ lt.float()
 
     def format_buffer_data(self):
         """
@@ -372,7 +374,7 @@ class Model(BaseModel):
         """
         self.format_buffer_data()
 
-        if epoch % 5 == 0:
+        if epoch % 2 == 0:
             # print('e', epoch)
             self.update_target_network()
 
@@ -394,9 +396,9 @@ if __name__ == "__main__":
                         help='Whether to use SAC or not [default: True]')
     parser.add_argument('--track_results', default='True',
                         help='Whether to track results on comet or not [default: True]')
-    parser.add_argument('--num_agents', type=int, default=3,
+    parser.add_argument('--num_agents', type=int, default=2,
                         help='Number of agents in particle environment [default: 3]')
-    parser.add_argument('--env', default="sc2",
+    parser.add_argument('--env', default="particle",
                         help='Environment to run ("sc2" or "particle" [default: particle]')
     parser.add_argument('--evaluate', default="False",
                         help='If True, load previously trained model and evaluate [default: False]')
@@ -404,33 +406,47 @@ if __name__ == "__main__":
                         help='If not none, load model from exp key')
 
     flags = parser.parse_args()
+    flags.evaluate = flags.evaluate.lower() in ["true", "t", "yes", "y"]
+    flags.track_results = flags.track_results.lower() in ["true", "t", "yes", "y"] and (not flags.evaluate)
 
     if flags.env == "particle":
         env = make_env(n_agents=flags.num_agents)
     elif flags.env == "sc2":
-        visualize_ = flags.evaluate.lower() in ["true", "t", "yes", "y"]
+        visualize_ = flags.evaluate
         print("visualize", visualize_)
-        env = SC2EnvWrapper("CollectMineralShards", visualize=visualize_)
+        env = SC2EnvWrapper("DefeatRoaches", visualize=visualize_)
     else:
         raise TypeError("Requested environment does not exist or is not implemented yet")
 
     policy_arch = {'type': MLPActor, 'h_size': 128}
-    critic_arch = {'h_size': 128, 'n_layers': 3}
+    critic_arch = {'h_size': 128, 'n_layers': 2}
 
     model = Model(flags, env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=20, seq_len=400, discount=0.7, lam=0.7, lr_critic=0.0000002, lr_actor=0.0001)
+                  batch_size=30, seq_len=80, discount=0.7, lam=0.7, lr_critic=0.000001, lr_actor=0.0001)
+
+    if flags.env == "particle":
+        env.seq_len = model.seq_len
 
     if flags.load_key is not None:
         model.load_model(flags.load_key)
 
     st = time.time()
 
-    model.train()
-    model.save_model()
+    if flags.evaluate:
+        model.evaluate()
+    else:
+        model.train()
+        model.save_model()
+        print("Time taken for {0:d} epochs {1:10.4f}".format(model.epochs, time.time() - st))
+
+    if flags.env =="particle":
+        visualize(model)
+    else:
+        model.env.env.close()
     # try:
     #     model.train()
     # except KeyboardInterrupt:
     #     pass
     #
-    print("Time taken for {0:d} epochs {1:10.4f}".format(model.epochs, time.time() - st))
+
     # visualize(model)

@@ -75,7 +75,7 @@ class SC2EnvWrapper:
         self.agent_obs = None
         self.global_obs = None
         self.unit_tags = np.zeros(self.mg_info["NUM_TOTAL"], dtype=np.int64)
-        self.num_crystals = self.mg_info["NUM_TOTAL"]
+        self.num_others = self.mg_info["NUM_TOTAL"]
 
     def reset(self):
         """
@@ -84,7 +84,7 @@ class SC2EnvWrapper:
         :return: return the environments reset timestep
         """
         ts = self.env.reset()
-        self.num_crystals = self.mg_info["NUM_TOTAL"]
+        self.num_others = self.mg_info["NUM_TOTAL"]
         return self.transform_env_info(ts)
 
     def transform_env_info(self, timestep):
@@ -192,18 +192,18 @@ class SC2EnvWrapper:
         self.global_obs, self.agent_obs = global_observations, agent_observations
 
         # REWARD SHAPING
-        num_crystals = global_idx_other - 1
-        if num_crystals > self.num_crystals:
+        num_others = global_idx_other - 1
+        if num_others > self.num_others:
             print("STAGE CLEARED")
             reward += 100
-            self.num_crystals = num_crystals
+        self.num_others = num_others
 
         reward -= min_distances / 5000.
 
         if self.mg_info["COMBAT"]:
             hp_diff = np.sum(global_observations[:self.mg_info["NUM_ALLIES"], 3]) - \
                       np.sum(global_observations[self.mg_info["NUM_ALLIES"]:, 3])
-            reward += hp_diff
+            reward += hp_diff / 10000.
 
 
         return torch.from_numpy(agent_observations), \

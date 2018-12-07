@@ -38,26 +38,28 @@ class BaseModel:
 
     def evaluate(self):
         rewards = []
+        true_rewards = []
 
         # initialize action to noop
         actions = torch.zeros(self.n_agents, self.env.action_size)
         actions[:, 0] = 1
         # np.random.seed()
-        curr_agent_obs, curr_global_state, reward = self.env.reset()
+        curr_agent_obs, curr_global_state, reward, true_reward, _ = self.env.reset()
 
         for t in range(self.seq_len):
             # get observations, by executing current action
             # TODO add parallelism
-            next_agent_obs, next_global_state, reward = self.env.step(actions)
+            next_agent_obs, next_global_state, reward, true_reward, _ = self.env.step(actions)
             rewards.append(reward)
+            true_rewards.append(true_reward)
             for n in range(self.n_agents):
                 pi = self.policy(curr_agent_obs[n], actions[n, :], n, eps=0).cpu()
                 # sample action from pi, convert to one-hot vector
                 action_idx = (torch.multinomial(pi, num_samples=1))
                 actions[n, :] = torch.zeros(self.action_size).scatter(0, action_idx, 1)
 
-        print("Mean reward for this batch: {0:5.3}".format(np.mean(rewards)))
-        return np.mean(rewards)
+        print("Mean reward for this batch: {0:5.3}".format(np.sum(true_rewards) / float(self.batch_size)))
+        return (np.sum(rewards) / float(self.batch_size), np.sum(true_rewards) / float(self.batch_size))
 
     def gather_batch(self, eps):
         """

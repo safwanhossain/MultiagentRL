@@ -13,7 +13,7 @@ def visualize(model):
         model.env.render()
         time.sleep(0.1)
         # get observations
-        obs_n, state, reward, _ = model.env.step(actions)
+        obs_n, state, reward, true_reward,  _ = model.env.step(actions)
 
         # reset the joint action, one-hot representation
         actions = torch.zeros((model.n_agents, model.action_size))
@@ -58,6 +58,7 @@ class ParticleEnv(MultiAgentEnv):
         self.action_size = 5
         self.agent_obs_size = 4 * self.n + 2
         self.global_state_size = 6 * self.n
+        self.seq_len = 1.
 
     def transform_env_info(self, obs_n, reward_n):
         agent_obs = np.array(obs_n, dtype=np.float32)[:, :self.agent_obs_size]
@@ -68,6 +69,7 @@ class ParticleEnv(MultiAgentEnv):
         return torch.from_numpy(agent_obs), \
                torch.from_numpy(global_state), \
                torch.from_numpy(np.array(reward, dtype=np.float32)), \
+               reward / self.seq_len, \
                False
 
     def step(self, *args, **kwargs):
