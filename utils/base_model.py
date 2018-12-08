@@ -3,6 +3,8 @@ import torch
 import numpy as np
 import multiprocessing
 import csv
+import utils.files
+import os
 
 class BaseModel:
 
@@ -42,6 +44,18 @@ class BaseModel:
             "lr_actor": self.lr_actor,
         })
         self.experiment.log_multiple_params(self.params)
+
+    def load_model(self, path):
+        self.actor.load_state_dict(torch.load(path + "_actor.pt"))
+        self.critic.load_state_dict(torch.load(path + "_critic.pt"))
+
+    def save_model(self, model_name=None):
+        if model_name is None:
+            model_name = "maac" if self.use_maac else "coma"
+
+        save_path = utils.files.get_models_path()
+        torch.save(self.critic.state_dict(), os.path.join(save_path, self.experiment.get_key() + model_name + "_critic.pt"))
+        torch.save(self.actor.state_dict(), os.path.join(save_path, self.experiment.get_key() + model_name + "_actor.pt"))
 
     def evaluate(self):
         rewards = []
@@ -132,7 +146,9 @@ class BaseModel:
         """
         metrics = {}
         for e in range(self.epochs):
-            eps = 0 if self.SAC else max(0.01, 0.15 - 0.15*e/self.epochs)
+
+            # eps has to be annealed to zero as the agents get better
+            eps = 0 if self.SAC else max(0, 0.15 - 0.15*e/self.epochs)
             metrics["Reward"] = self.gather_batch(eps=eps)
             metrics["Critic Loss"], metrics["Actor Loss"] = self.update(e)
             
@@ -147,4 +163,5 @@ class BaseModel:
             
             if (e % 50) == 0:
                 self.log_values_to_file()
+                self.save_model()
 

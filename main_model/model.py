@@ -57,7 +57,7 @@ class Model(BaseModel):
         self.num_envs = len(envs)
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
-        self.epochs = 10000
+        self.epochs = 5000
         self.num_updates = 1
         self.num_entries_per_update = self.batch_size * self.seq_len
         
@@ -428,6 +428,8 @@ if __name__ == "__main__":
                         help='Whether to use TD_LAMBDA or TD_ONE [default: True]')
     parser.add_argument('--track_results', default='True',
                         help='Whether to track results on comet or not [default: True]')
+    parser.add_argument('--save_model', default='True',
+                        help='Whether to save the trained model or not [default: True]')
     parser.add_argument('--num_agents', type=int, default=3,
                         help='Number of agents in particle environment [default: 3]')
     parser.add_argument('--env', default="particle",
