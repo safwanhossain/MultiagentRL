@@ -4,9 +4,9 @@ sys.path.append('../')
 
 import argparse
 from utils.base_model import BaseModel
-from actors import GRUActor, MLPActor
+from actors import *
 from environment.particle_env import make_env, visualize
-from environment.sc2_env_wrapper import SC2EnvWrapper
+#from environment.sc2_env_wrapper import SC2EnvWrapper
 from critic_maac import Critic as MAAC_Critic
 from critic import Critic
 import numpy as np
@@ -43,6 +43,7 @@ class Model(BaseModel):
         super(Model, self).__init__(use_gpu=use_gpu, track_results=track_results, log_files=log_files)
         self.use_maac = flags.maac.lower() in ["true", "t", "yes", "y"]
         self.SAC = flags.SAC.lower() in ["true", "t", "yes", "y"]
+        self.TD_LAMBDA = flags.TD_LAMBDA.lower() in ["true", "t", "yes", "y"]
         self.batch_size = batch_size
         self.seq_len = seq_len
         self.discount = discount
@@ -90,8 +91,8 @@ class Model(BaseModel):
         self.actor = ActorType(input_size=self.obs_size + self.action_size + self.n_agents,
                                h_size=policy_arch['h_size'],
                                action_size = self.action_size,
-                               device=self.device,
-                               n_agents = self.n_agents)
+                               device=self.device)
+
         self.actor_optimizer = torch.optim.RMSprop(self.actor.parameters(), lr=self.lr_actor, eps=1e-08)
 
         if self.use_maac:
@@ -116,6 +117,24 @@ class Model(BaseModel):
 
         self.critic_optimizer = torch.optim.RMSprop(self.critic.parameters(), lr=self.lr_critic, eps=1e-08)
 
+        # set fit_critic based on TD_LAMBDA flag
+        if self.TD_LAMBDA:
+            self.update_critic = self.td_lambda
+
+        else:
+            self.update_critic = self.td_one
+
+        self.set_params()
+        self.experiment.log_multiple_params(self.policy_arch)
+        self.experiment.log_multiple_params(self.critic_arch)
+
+        if isinstance(self.actor, GRUActor):
+            AgentType = GRUAgent
+        else:
+            AgentType = MLPAgent
+
+        self.agents = [AgentType(self.actor) for _ in range(self.n_agents)]
+
         self.params["lam"] = self.lam
         self.set_params()
         self.experiment.log_multiple_params(self.policy_arch)
@@ -128,6 +147,9 @@ class Model(BaseModel):
             return (self.observations[:, :, t:t + 1, :], self.actions[:, :, t:t + 1, :]) if self.use_maac else \
                    self.joint_action_state_pl[:, t]
 
+    def reset_agents(self):
+        for agent in self.agents:
+            agent.reset_state()
 
     def update_target_network(self):
         """
@@ -142,8 +164,9 @@ class Model(BaseModel):
         Accumulates actor gradients from each agent and performs the update for every time-step
         :return:
         """
-        # Clear state of all actor's GRU Cell
-        self.actor.reset()
+        # reset the hidden state of agents
+        self.reset_agents()
+
         # first get the Q value for the joint actions
         # print('q input', self.joint_action_state_pl[0, :, :])
 
@@ -169,7 +192,7 @@ class Model(BaseModel):
         # computing baselines, by broadcasting across rollouts and time-steps
         for a in range(self.n_agents):
             # get the dist over actions, based on each agent's observation, use the same epsilon during fitting?
-            pi = self.actor(self.actor_input_pl[a], a, eps=0)
+            pi = self.agents[a].get_action_dist(self.actor_input_pl[a], eps=0)
 
             # make a copy of the joint-action, state, to substitute different actions in it
             diff_actions.copy_(diff_action_in)
@@ -228,7 +251,7 @@ class Model(BaseModel):
         self.actor_optimizer.step()
         self.actor_optimizer.zero_grad()
         # Clear state of actor's GRU Cell
-        self.actor.reset()
+        self.reset_agents()
         return sum_loss / (self.n_agents * self.seq_len)
 
     def td_one(self):
@@ -255,7 +278,7 @@ class Model(BaseModel):
             if self.SAC:
                 joint_action_dist = 1
                 for a in range(self.n_agents):
-                    joint_action_dist *= self.actor(self.actor_input_pl[a][:, t + 1, :], eps=0)
+                    joint_action_dist *= self.agents[a].get_action_dist(self.actor_input_pl[a][:, t + 1, :], eps=0)
                 G[:, :, t, 1] -= self.alpha * torch.sum(torch.log(joint_action_dist) * joint_action_dist, dim=-1)
 
             pred = self.critic.forward(self.get_critic_input(t)).squeeze()
@@ -323,7 +346,7 @@ class Model(BaseModel):
             if self.SAC:
                 joint_action_dist = 1
                 for a in range(self.n_agents):
-                    joint_action_dist *= self.actor(self.actor_input_pl[a][:, t + 1, :], n, eps=0)
+                    joint_action_dist *= self.agents[a].get_action_dist(self.actor_input_pl[a][:, t + 1, :], eps=0)
                 targets[:, :, t] -= self.alpha * torch.sum(torch.log(joint_action_dist) * joint_action_dist, dim=-1)
 
             # print('target', targets[0, t])
@@ -373,7 +396,7 @@ class Model(BaseModel):
         agent_idx = torch.zeros(self.n_agents).scatter(0, torch.zeros(self.n_agents).fill_(n).long() , 1)
         actor_input = torch.cat((obs, prev_action, agent_idx))
         actor_input = actor_input.view(1, 1, -1).type(torch.FloatTensor).to(self.device)
-        return self.actor(actor_input, n, eps=eps)[0][0]
+        return self.agents[n].get_action(actor_input, eps=eps)[0][0]
 
     def update(self, epoch):
         """
@@ -385,7 +408,7 @@ class Model(BaseModel):
             # print('e', epoch)
             self.update_target_network()
 
-        critic_loss = self.td_lambda()
+        critic_loss = self.update_critic()
         actor_loss = self.update_actor()
 
         self.buffer.reset()
@@ -401,6 +424,8 @@ if __name__ == "__main__":
                         help='Whether to use maac critic or not [default: True]')
     parser.add_argument('--SAC', default='True',
                         help='Whether to use SAC or not [default: True]')
+    parser.add_argument('--TD_LAMBDA', default='True',
+                        help='Whether to use TD_LAMBDA or TD_ONE [default: True]')
     parser.add_argument('--track_results', default='True',
                         help='Whether to track results on comet or not [default: True]')
     parser.add_argument('--num_agents', type=int, default=3,
@@ -420,7 +445,7 @@ if __name__ == "__main__":
             env.seed(i*1000)
             envs.append(env)
     elif flags.env == "sc2":
-        envs = [SC2EnvWrapper("CollectMineralShards") for _ in range(int(flags.num_ev))]
+        envs = [SC2EnvWrapper("CollectMineralShards") for _ in range(int(flags.num_env))]
     else:
         raise TypeError("Requested environment does not exist or is not implemented yet")
 

@@ -3,31 +3,113 @@ from utils.initializations import normal_init, xavier_init
 import torch
 import torch.nn as nn
 
-class GRUActor(nn.Module):
-    """
-    This network, takes in observations, and returns an action. Action space is discrete
-    """
-    def __init__(self, input_size, h_size, action_size, device, n_agents):
+from abc import ABC, abstractmethod
+
+class Agent(ABC):
+
+    def __init__(self, actor_net):
+        self.actor_net = actor_net
+        self.h_state = None
+
+    @abstractmethod
+    def get_action(self, actor_input, **args):
+        pass
+
+    @abstractmethod
+    def get_action_dist(self, actor_input, **args):
+        pass
+
+    @abstractmethod
+    def reset_state(self, actor_input, **args):
+        pass
+
+class GRUAgent(Agent):
+
+    def __init__(self, actor_net):
+        """
+        :param actor_net: each agent gets an actor network,
+        allows for easily switching between shared vs non-shared params
+        """
+        super(GRUAgent, self).__init__(actor_net)
+
+        self.h_state = None
+
+    def get_action(self, actor_input, **args):
+
+        eps = args['eps']
+        action_dist, state = self.actor_net.forward(actor_input, eps, self.h_state)
+        if torch.sum(action_dist < 0.) > 0:
+            print("YIKES")
+        self.h_state = state
+
+        action_idx = (torch.multinomial(action_dist[0, 0, :], num_samples=1)).cpu().numpy()
+        action = torch.zeros(self.actor_net.action_size)
+        action[action_idx] = 1
+        return action
+
+    def get_action_dist(self, actor_input, **args):
+
+        eps = args['eps']
+        action_dist, state = self.actor_net.forward(actor_input, eps, self.h_state)
+        self.h_state = state
+
+        return action_dist
+
+    def reset_state(self):
+        self.h_state = None
+
+
+class MLPAgent(Agent):
+    def __init__(self, actor_net):
+        """
+        :param actor_net: each agent gets an actor network,
+        allows for easily switching between shared vs non-shared params
+        """
+        super(MLPAgent, self).__init__(actor_net)
+
+    def get_action(self, actor_input, **args):
+
+        eps = args['eps']
+        action_dist = self.actor_net.forward(actor_input, eps)
+        if torch.sum(action_dist < 0.) > 0:
+            print("YIKES")
+
+        action_idx = (torch.multinomial(action_dist[0, 0, :], num_samples=1)).cpu().numpy()
+        action = torch.zeros(self.actor_net.action_size)
+        action[action_idx] = 1
+        return action
+
+    def get_action_dist(self, actor_input, **args):
+        eps = args['eps']
+        action_dist = self.actor_net.forward(actor_input, eps)
+
+        return action_dist
+
+    def reset_state(self):
+        pass
+
+class GRUActor(torch.nn.Module):
+
+    ''' This network, takes in observations, and returns an action. Action space is discrete,
+    '''
+    def __init__(self, input_size, h_size, action_size, device):
         super(GRUActor, self).__init__()
         self.input_size = input_size
         self.action_size = action_size
-        self.h_size = h_size
         self.device = device
-        self.n_agents = n_agents
-        self.h = [None for _ in range(self.n_agents)]
+        self.h_size = h_size
 
-        self.actor_gru = nn.GRU(input_size=input_size,
+        self.actor_gru = torch.nn.GRU(input_size=input_size,
                                       hidden_size=h_size,
                                       batch_first=True).to(self.device)
 
-        self.linear = nn.Linear(h_size, self.action_size).to(self.device)
-        # self.apply(normal_init)
+        self.linear = torch.nn.Linear(h_size, self.action_size).to(self.device)
+
         self.to(self.device)
+        #self.actor_gru.apply(self.init_weights)
+        #self.linear.apply(self.init_weights)
 
-    def reset(self):
-        self.h = [None for _ in range(self.n_agents)]
-
-    def forward(self, obs_seq, n, eps):
+    def forward(self, obs_seq, eps, h_state=None):
         """
         outputs prob dist over possible actions, using an eps-bounded softmax for exploration
         input sequence shape is batch-first
@@ -36,42 +118,45 @@ class GRUActor(nn.Module):
         :param eps: softmax lower bound, for exploration
         :return:
         """
+        batch_size = obs_seq.size()[0]
         # initial state, shape (num_layers * num_directions, batch, hidden_size)
-        if self.h[n] is None:
-            batch_size = obs_seq.size()[0]
-            self.h[n] = torch.zeros(1, batch_size, self.h_size).to(self.device)
+
+        if h_state is None:
+            h_state = torch.zeros(1, batch_size, self.h_size).to(self.device)
 
         # output has shape [batch, seq_len, h_size]
-        output, self.h[n] = self.actor_gru(obs_seq, self.h[n])
+        output, h_state = self.actor_gru(obs_seq.view(batch_size, -1, self.input_size), h_state)
         logits = self.linear(output)
 
         # compute eps-bounded softmax
-        softmax = nn.functional.softmax(logits, dim=-1)
-        return (1 - eps) * softmax + eps / self.action_size
+        softmax = torch.nn.functional.softmax(logits, dim=-1)
+        return (1 - eps) * softmax + eps / self.action_size, h_state
 
-class MLPActor(nn.Module):
+    def init_weights(self, m):
+        if type(m) == nn.Linear:
+            torch.nn.init.normal(m.weight, mean=0, std=0.01)
+            m.bias.data.fill_(0.01)
 
-    def __init__(self, input_size, h_size, action_size, device, n_agents):
+class MLPActor(torch.nn.Module):
+
+    def __init__(self, input_size, h_size, action_size, device):
         super(MLPActor, self).__init__()
         self.input_size = input_size
         self.action_size = action_size
-        self.h_size = h_size
         self.device = device
+        self.h_size = h_size
 
-        self.mlp = nn.Sequential(
-            nn.Linear(input_size, h_size),
-            nn.ReLU(),
-            nn.Linear(h_size, h_size),
-            nn.ReLU(),
-            nn.Linear(h_size, action_size)
-        )
-        # self.apply(normal_init)
+        self.model = torch.nn.Sequential(
+            torch.nn.Linear(input_size, h_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(h_size, h_size),
+            torch.nn.ReLU(),
+            torch.nn.Linear(h_size, action_size)).to(self.device)
+
         self.to(self.device)
+        #self.model.apply(self.init_weights)
 
-    def reset(self):
-        pass
-
-    def forward(self, input, n, eps):
+    def forward(self, input, eps):
         """
         outputs prob dist over possible actions, using an eps-bounded softmax for exploration
         input sequence shape is batch-first
@@ -80,16 +165,22 @@ class MLPActor(nn.Module):
         :param eps: softmax lower bound, for exploration
         :return:
         """
-        logits = self.mlp(input)
+
+        logits = self.model.forward(input)
 
         # compute eps-bounded softmax
-        softmax = nn.functional.softmax(logits, dim=-1)
+        softmax = torch.nn.functional.softmax(logits, dim=-1)
         return (1 - eps) * softmax + eps / self.action_size
+
+    def init_weights(self, m):
+        if type(m) == nn.Linear:
+            torch.nn.init.normal(m.weight, mean=0, std=0.001)
+            m.bias.data.fill_(0.01)
 
 def unit_test():
     test_actor = GRUActor(input_size=14, h_size=128, action_size=5)
     obs_seq = torch.randn((10, 6, 14))
-    output = test_actor.forward(obs_seq, eps=0.01)
+    output = test_actor.forward(obs_seq, eps=0.01, reset=True)
     if output.shape == (10, 6, 5):
         print("PASSED")
 

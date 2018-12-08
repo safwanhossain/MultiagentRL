@@ -61,10 +61,9 @@ class BaseModel:
             next_agent_obs, next_global_state, reward = env.step(actions)
             rewards.append(reward)
             for n in range(self.n_agents):
-                pi = self.policy(curr_agent_obs[n], actions[n, :], n, eps=0).cpu()
-                # sample action from pi, convert to one-hot vector
-                action_idx = (torch.multinomial(pi, num_samples=1))
-                actions[n, :] = torch.zeros(self.action_size).scatter(0, action_idx, 1)
+                # get a chosen action directly (as one hot vector), sampled from pi
+                action = self.policy(curr_agent_obs[n], actions[n, :], n, eps=0).cpu()
+                actions[n, :] = action
 
         print("Mean reward for this batch: {0:5.3}".format(np.mean(rewards)))
         return np.mean(rewards)
@@ -100,12 +99,8 @@ class BaseModel:
 
                 # for each agent, save observation, compute next action
                 for n in range(self.n_agents):
-                    pi = self.policy(curr_agent_obs[n], actions[n, :], n, eps).cpu()
-                    if torch.sum(pi < 0.) > 0:
-                        print("YIKES")
-                    # sample action from pi, convert to one-hot vector
-                    action_idx = (torch.multinomial(pi, num_samples=1))
-                    actions[n, :] = torch.zeros(self.action_size).scatter(0, action_idx, 1)
+                    action = self.policy(curr_agent_obs[n], actions[n, :], n, eps).cpu()
+                    actions[n, :] = action
 
             count += self.seq_len
 
