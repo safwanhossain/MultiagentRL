@@ -44,10 +44,10 @@ class Model(BaseModel):
         self.use_maac = flags.maac.lower() in ["true", "t", "yes", "y"]
         self.SAC = flags.SAC.lower() in ["true", "t", "yes", "y"]
         self.batch_size = batch_size
-        self.seq_len = seq_len
         self.discount = discount
         self.lam = lam
         self.n_agents = envs[0].n
+        self.seq_len = seq_len
         self.action_size = envs[0].action_size
         self.obs_size = envs[0].agent_obs_size
         self.state_size = envs[0].global_state_size
@@ -59,7 +59,8 @@ class Model(BaseModel):
         self.epochs = 10000
         self.num_updates = 1
         self.num_entries_per_update = self.batch_size * self.seq_len
-        
+        self.use_maac_advantage = flags.maac_advantage
+
         self.critic_arch = critic_arch
         self.policy_arch = policy_arch
 
@@ -69,19 +70,19 @@ class Model(BaseModel):
 
         # Create "placeholders" for incoming training data (Sorry, tensorflow habit)
         # joint-action state pairs
-        self.joint_action_state_pl = torch.zeros((batch_size, seq_len, self.state_size+self.action_size*self.n_agents))
+        self.joint_action_state_pl = torch.zeros((batch_size, self.seq_len, self.state_size+self.action_size*self.n_agents))
         self.joint_action_state_pl = self.joint_action_state_pl.to(self.device)
 
         # obs, prev_action pairs, one tensor for each agent
         self.actor_input_pl = \
-            [torch.zeros((batch_size, seq_len, self.obs_size+self.action_size+self.n_agents)).to(self.device)
+            [torch.zeros((batch_size, self.seq_len, self.obs_size+self.action_size+self.n_agents)).to(self.device)
             for _ in range(self.n_agents)]
 
         self.observations = torch.zeros(self.n_agents, self.batch_size, self.seq_len, self.obs_size).to(self.device)
         self.actions = torch.zeros(self.n_agents, self.batch_size, self.seq_len, self.action_size).to(self.device)
 
         # sequence of immediate rewards
-        self.reward_seq_pl = np.zeros((batch_size, seq_len))
+        self.reward_seq_pl = np.zeros((batch_size, self.seq_len))
 
         # set up the modules for actor-critic based on specified arch
         # specify GRU or MLP policy
@@ -147,7 +148,9 @@ class Model(BaseModel):
         # first get the Q value for the joint actions
         # print('q input', self.joint_action_state_pl[0, :, :])
 
-        q_vals = self.critic.forward(self.get_critic_input()).detach()
+        all_q, q_vals = self.critic.forward(self.get_critic_input(), ret_all_actions=True)
+        all_q.detach()
+        q_vals.detach()
 
         # print("q_vals", q_vals)
         diff_action_in = self.actions if self.use_maac else self.joint_action_state_pl
@@ -197,8 +200,10 @@ class Model(BaseModel):
                 Q_u = self.critic(critic_in)
 
                 if self.use_maac:
-                    Q_u = Q_u[a]
-
+                    if self.use_maac_advantage:
+                        Q_u = all_q[a,:,:,u].unsqueeze(-1) 
+                    else:
+                        Q_u = Q_u[a]
                 advantage[a] -= Q_u*pi[:, :, u].unsqueeze_(-1)
 
             # elif self.use_maac:
@@ -409,6 +414,10 @@ if __name__ == "__main__":
                         help='Environment to run ("sc2" or "particle" [default: particle]')
     parser.add_argument('--num_env', default="1",
                         help='Number of parallel environments (default to 1)')
+    parser.add_argument('--maac_advantage', default="False",
+                        help='Whether to use the MAAC advantage')
+    parser.add_argument('--to_log_csv', default="True",
+                        help='Whether to use the MAAC advantage')
 
     flags = parser.parse_args()
 
@@ -428,13 +437,16 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 128, 'n_layers':2}
 
     # Files to log the stats - allows us to compare various models
-    reward_file = "reward.csv"
-    critic_loss_file = "critic_loss.csv"
-    agent_loss_file = "agent_loss.csv"
+    log_files = None
+    if flags.to_log_csv:
+        reward_file = "reward_maac_one_env.csv"
+        critic_loss_file = "critic_loss_maac_one_env.csv"
+        agent_loss_file = "agent_loss_maac_one_env.csv"
+        log_files = [reward_file, critic_loss_file, agent_loss_file]
 
     model = Model(flags, envs=envs, critic_arch=critic_arch, policy_arch=policy_arch,
                   batch_size=30, seq_len=80, discount=0.9, lam=0.8, lr_critic=0.0002, 
-                  lr_actor=0.0001, log_files=[reward_file, critic_loss_file, agent_loss_file])
+                  lr_actor=0.0001, log_files=log_files)
 
     st = time.time()
 
