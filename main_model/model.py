@@ -28,7 +28,7 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
 class Model(BaseModel):
 
     def __init__(self, flags, envs, critic_arch, policy_arch, batch_size, seq_len, discount, lam,
-                 lr_critic=0.0001, lr_actor=0.0001, log_files=None):
+                 lr_critic=0.0001, lr_actor=0.0001, alpha=0.1, log_files=None):
         """
         Initialize all aspects of the model
         :param env: Environment model will be used in
@@ -44,6 +44,7 @@ class Model(BaseModel):
         self.use_maac = flags.maac.lower() in ["true", "t", "yes", "y"]
         self.SAC = flags.SAC.lower() in ["true", "t", "yes", "y"]
         self.TD_LAMBDA = flags.TD_LAMBDA.lower() in ["true", "t", "yes", "y"]
+        self.use_maac_advantage = flags.maac_advantage
         self.batch_size = batch_size
         self.seq_len = seq_len
         self.discount = discount
@@ -52,7 +53,7 @@ class Model(BaseModel):
         self.action_size = envs[0].action_size
         self.obs_size = envs[0].agent_obs_size
         self.state_size = envs[0].global_state_size
-        self.alpha = 0.2
+        self.alpha = alpha
         self.envs = envs
         self.num_envs = len(envs)
         self.lr_critic = lr_critic
@@ -60,6 +61,7 @@ class Model(BaseModel):
         self.epochs = 5000
         self.num_updates = 1
         self.num_entries_per_update = self.batch_size * self.seq_len
+
         
         self.critic_arch = critic_arch
         self.policy_arch = policy_arch
@@ -72,6 +74,12 @@ class Model(BaseModel):
         # joint-action state pairs
         self.joint_action_state_pl = torch.zeros((batch_size, seq_len, self.state_size+self.action_size*self.n_agents))
         self.joint_action_state_pl = self.joint_action_state_pl.to(self.device)
+
+        # the global state
+        self.global_state_pl = torch.zeros((batch_size, seq_len, self.state_size))
+
+        # joint action of all agents, flattened
+        self.joint_action_pl = torch.zeros((batch_size, seq_len, self.action_size * self.n_agents))
 
         # obs, prev_action pairs, one tensor for each agent
         self.actor_input_pl = \
@@ -171,6 +179,11 @@ class Model(BaseModel):
         # print('q input', self.joint_action_state_pl[0, :, :])
 
         q_vals = self.critic.forward(self.get_critic_input()).detach()
+
+        # TODO: integrate
+        # all_q, q_vals = self.critic.forward(self.get_critic_input(), ret_all_actions=True)
+        # all_q.detach()
+        # q_vals.detach()
 
         # print("q_vals", q_vals)
         diff_action_in = self.actions if self.use_maac else self.joint_action_state_pl
@@ -402,7 +415,7 @@ class Model(BaseModel):
         """
         update model
         """
-        self.format_buffer_data()
+        #self.format_buffer_data()
 
         if epoch % 2 == 0:
             # print('e', epoch)
@@ -455,12 +468,12 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 128, 'n_layers':2}
 
     # Files to log the stats - allows us to compare various models
-    reward_file = "reward.csv"
+    reward_file = "reward_3_tdone.csv"
     critic_loss_file = "critic_loss.csv"
     agent_loss_file = "agent_loss.csv"
 
     model = Model(flags, envs=envs, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=30, seq_len=80, discount=0.9, lam=0.8, lr_critic=0.0002, 
+                  batch_size=30, seq_len=80, discount=0.9, lam=0.8, alpha=0.1, lr_critic=0.0002,
                   lr_actor=0.0001, log_files=[reward_file, critic_loss_file, agent_loss_file])
 
     st = time.time()

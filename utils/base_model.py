@@ -14,11 +14,11 @@ class BaseModel:
         """
         super().__init__()
         self.experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', \
-                project_name='all_in_one_safwan',#self.__class__.__name__,
+                project_name='all_in_one_elsa',#self.__class__.__name__,
                                      auto_param_logging=False, auto_metric_logging=False,
                                      disabled=(not track_results))
         self.use_gpu = use_gpu
-        self.device = torch.device('cuda:0' if torch.cuda.is_available() and use_gpu else 'cpu')
+        self.device = torch.device('cuda:1' if torch.cuda.is_available() and use_gpu else 'cpu')
         self.params = {}
         
         # This is for logging to a csv file. Since logging can be expensive, we will maintain
@@ -42,6 +42,10 @@ class BaseModel:
             "n_agents": self.envs[0].n,
             "lr_critic": self.lr_critic,
             "lr_actor": self.lr_actor,
+            "alpha": self.alpha,
+            "SAC": self.SAC,
+            "TD_LAMBDA": self.TD_LAMBDA,
+            "MAAC": self.use_maac,
         })
         self.experiment.log_multiple_params(self.params)
 
@@ -121,6 +125,65 @@ class BaseModel:
         print("Mean reward for this batch: {0:5.3}".format(np.mean(rewards)))
         return np.mean(rewards)
 
+    def gather_rollout(self, eps):
+        """
+           gathers rollouts under the current policy
+           saves data in format compatible with coma training
+           global state computation is specific to simple-spread environment
+           TODO: make env agnostic, add helper functions specific to each environment
+           :param self: instance of coma model
+           :param eps:
+           :return:
+           """
+        for i in range(self.batch_size):
+
+            # initialize action to noop
+            joint_action = torch.zeros((self.n_agents, self.action_size))
+            joint_action[:, 0] = 1
+
+            env = self.envs[np.random.choice(self.num_envs)]
+            env.reset()
+            self.reset_agents()
+
+            for t in range(self.seq_len):
+
+                # get observations, by executing current joint action
+                obs_n, global_state, reward_n, _ = env.step(joint_action)
+
+                # they all get the same reward, save the reward
+                self.reward_seq_pl[i, t] = reward_n[0]
+
+                self.global_state_pl[i, t, :] = global_state
+
+                # for each agent, save observation, compute next action
+                for n in range(self.n_agents):
+                    # one-hot agent index
+                    agent_idx = torch.zeros(self.n_agents)
+                    agent_idx[n] = 1
+
+                    # get distribution over actions, concatenate observation and prev action for actor training
+                    obs_action = torch.cat((obs_n[n][0:self.obs_size], joint_action[n, :], agent_idx), -1)
+                    actor_input = obs_action
+
+                    # save the actor input for training
+                    self.actor_input_pl[n][i, t, :] = actor_input
+
+                    action = self.agents[n].get_action(self.actor_input_pl[n][i, t, :].view(1, 1, -1), eps=eps)
+                    joint_action[n, :] = action
+
+                    # save the next joint action for training
+                    self.joint_action_pl[i, t, :] = joint_action.flatten()
+
+        # concatenate the joint action, global state, set network inputs to torch tensors
+        # action taken at state s
+        self.joint_action_state_pl = torch.cat((self.joint_action_pl, self.global_state_pl), dim=-1).to(self.device)
+
+        self.joint_action_state_pl.requires_grad_(True)
+
+        # return the mean reward of the batch
+        print("Mean reward for this batch: {0:5.3}".format(np.mean(self.reward_seq_pl)))
+        return np.mean(self.reward_seq_pl)
+
     def log_values_to_file(self):
         with open(self.reward_file, 'a', newline='') as reward_csv:
             writer = csv.writer(reward_csv)
@@ -149,7 +212,7 @@ class BaseModel:
 
             # eps has to be annealed to zero as the agents get better
             eps = 0 if self.SAC else max(0, 0.15 - 0.15*e/self.epochs)
-            metrics["Reward"] = self.gather_batch(eps=eps)
+            metrics["Reward"] = self.gather_rollout(eps=eps)
             metrics["Critic Loss"], metrics["Actor Loss"] = self.update(e)
             
             self.reward_dict[e] = metrics["Reward"]
