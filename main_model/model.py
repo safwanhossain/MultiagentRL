@@ -43,12 +43,13 @@ class Model(BaseModel):
         super(Model, self).__init__(use_gpu=use_gpu, track_results=track_results, log_files=log_files)
         self.use_maac = flags.maac.lower() in ["true", "t", "yes", "y"]
         self.SAC = flags.SAC.lower() in ["true", "t", "yes", "y"]
+        print(self.SAC)
         self.TD_LAMBDA = flags.TD_LAMBDA.lower() in ["true", "t", "yes", "y"]
         self.batch_size = batch_size
+        self.seq_len = seq_len
         self.discount = discount
         self.lam = lam
         self.n_agents = envs[0].n
-        self.seq_len = seq_len
         self.action_size = envs[0].action_size
         self.obs_size = envs[0].agent_obs_size
         self.state_size = envs[0].global_state_size
@@ -93,7 +94,6 @@ class Model(BaseModel):
                                h_size=policy_arch['h_size'],
                                action_size = self.action_size,
                                device=self.device)
-
         self.actor_optimizer = torch.optim.RMSprop(self.actor.parameters(), lr=self.lr_actor, eps=1e-08)
 
         if self.use_maac:
@@ -456,7 +456,7 @@ if __name__ == "__main__":
             env.seed(i*1000)
             envs.append(env)
     elif flags.env == "sc2":
-        envs = [SC2EnvWrapper("CollectMineralShards") for _ in range(int(flags.num_env))]
+        envs = [SC2EnvWrapper("CollectMineralShards") for _ in range(int(flags.num_ev))]
     else:
         raise TypeError("Requested environment does not exist or is not implemented yet")
 
@@ -466,9 +466,9 @@ if __name__ == "__main__":
     # Files to log the stats - allows us to compare various models
     log_files = None
     if flags.to_log_csv:
-        reward_file = "reward_maac_one_env.csv"
-        critic_loss_file = "critic_loss_maac_one_env.csv"
-        agent_loss_file = "agent_loss_maac_one_env.csv"
+        reward_file = "reward_maac_1env_SAC.csv"
+        critic_loss_file = "critic_loss_maac_1env_SAC.csv"
+        agent_loss_file = "agent_loss_maac_1env_SAC.csv"
         log_files = [reward_file, critic_loss_file, agent_loss_file]
 
     model = Model(flags, envs=envs, critic_arch=critic_arch, policy_arch=policy_arch,
