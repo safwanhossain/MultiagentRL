@@ -3,6 +3,7 @@ sys.path.append('../')
 from comet_ml import Experiment
 import argparse
 from environment.particle_env import make_env, visualize
+from environment.sc2_env_wrapper import SC2EnvWrapper
 import numpy as np
 import time
 from main_model.coma import COMA
@@ -20,19 +21,19 @@ if __name__ == "__main__":
                         help='Whether to use SAC or not [default: True]')
     parser.add_argument('--TD_LAMBDA', default='True',
                         help='Whether to use TD_LAMBDA or TD_ONE [default: True]')
-    parser.add_argument('--track_results', default='True',
+    parser.add_argument('--track_results', default='False',
                         help='Whether to track results on comet or not [default: True]')
-    parser.add_argument('--save_model', default='True',
+    parser.add_argument('--save_model', default='False',
                         help='Whether to save the trained model or not [default: True]')
-    parser.add_argument('--num_agents', type=int, default=3,
+    parser.add_argument('--num_agents', type=int, default=5,
                         help='Number of agents in particle environment [default: 3]')
-    parser.add_argument('--env', default="particle",
+    parser.add_argument('--env', default="sc2",
                         help='Environment to run ("sc2" or "particle" [default: particle]')
     parser.add_argument('--num_env', default="1",
                         help='Number of parallel environments (default to 1)')
     parser.add_argument('--maac_advantage', default="False",
                         help='Whether to use the MAAC advantage')
-    parser.add_argument('--to_log_csv', default="True",
+    parser.add_argument('--to_log_csv', default="False",
                         help='Whether to use log resutls to csv files')
 
     flags = parser.parse_args()
@@ -53,7 +54,7 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 128, 'n_layers':2}
 
     # Files to log the stats - allows us to compare various models
-    reward_file = "reward_3_coma_hlr.csv"
+    reward_file = "reward_5_coma_fast.csv"
     critic_loss_file = "critic_loss.csv"
     agent_loss_file = "agent_loss.csv"
 

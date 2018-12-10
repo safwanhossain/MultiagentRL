@@ -172,6 +172,7 @@ class BaseModel:
             curr_agent_obs, curr_global_state, reward, _ = env.reset()
 
             for t in range(self.seq_len):
+                print('t', t)
                 # get observations, by executing current action
                 # TODO add parallelism
                 next_agent_obs, next_global_state, reward, end_signal = env.step(actions)

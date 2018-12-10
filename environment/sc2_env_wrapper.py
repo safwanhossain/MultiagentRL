@@ -1,6 +1,7 @@
 import numpy as np
 
 from pysc2.lib import features
+from pysc2.lib import actions as sc2_actions
 from pysc2.env import sc2_env
 
 from s2clientprotocol import raw_pb2 as raw_pb
@@ -12,6 +13,10 @@ import torch
 _PLAYER_SELF = features.PlayerRelative.SELF
 _PLAYER_NEUTRAL = features.PlayerRelative.NEUTRAL  # beacon/minerals
 _PLAYER_ENEMY = features.PlayerRelative.ENEMY
+_NOOP = sc2_actions.FUNCTIONS.no_op.id
+_STOP = sc2_actions.FUNCTIONS.Stop_Stop_quick.id
+_MOVE = sc2_actions.FUNCTIONS.Move_minimap.id
+_ATTACK = sc2_actions.FUNCTIONS.Attack_Attack_minimap.id
 
 class SC2EnvWrapper:
 
@@ -86,7 +91,6 @@ class SC2EnvWrapper:
         (within the units field of vision for agent obs)
         Each agent entry will have 6 fields: unit_type, relative x, relative y, distance, health, shield
         Global entries will be identical except lacking a distance
-
         :param timestep: full observation from game
         :return: individual agent observations and global observations for the critic
         """
@@ -185,19 +189,26 @@ class SC2EnvWrapper:
             xy = (self.global_obs[n][1], self.global_obs[n][2])
             unit_cmd = None
             if index == 0:
-                unit_cmd = self.noop(unit_tag)
+                #unit_cmd = self.noop(unit_tag)
+                action = _NOOP
             elif index == 1:
-                unit_cmd = self.stop(unit_tag)
+                #unit_cmd = self.stop(unit_tag)
+                action = _NOOP
             elif 1 < index <= 17:
-                unit_cmd = self.move(unit_tag, index, xy)
+                #unit_cmd = self.move(unit_tag, index, xy)
+                action = _NOOP
             elif index > 16:
-                unit_cmd = self.attack(unit_tag, index, xy)
+                #unit_cmd = self.attack(unit_tag, index, xy)
+                action = _NOOP
 
-            raw_action = raw_pb.ActionRaw(unit_command=unit_cmd)
-            actions.append(sc_pb.Action(action_raw=raw_action))
+            #raw_action = raw_pb.ActionRaw(unit_command=unit_cmd)
+            #actions.append(sc_pb.Action(action_raw=raw_action))
+            actions.append(sc2_actions.FunctionCall(action, []))
 
         # run sc2 environment with actions
         timestep = self.env.step([actions])
+        # actions = [
+        #     sc2_actions.FunctionCall(_SELECT_ARMY, [_SELECT_ALL])
         # get interpretable observations and rewards
         return self.transform_env_info(timestep)
 
@@ -215,6 +226,7 @@ class SC2EnvWrapper:
         y = int(round(xy[1] + np.sin(angle) * 10))
 
         point = common_pb.Point2D(x=x, y=y)
+        # move minimap
         return raw_pb.ActionRawUnitCommand(ability_id = 16,
                                            unit_tags = [unit_tag],
                                            queue_command = False,
@@ -234,6 +246,7 @@ class SC2EnvWrapper:
         if np.sqrt(np.sum(np.square(xy - target_xy)), axis=1) > 5:
             return None
         target_tag = self.unit_tags[target_idx]
+        # Function.ability(15, "Attack_Attack_minimap", cmd_minimap, 23, 3674),
         return raw_pb.ActionRawUnitCommand(ability_id = 23,
                                            unit_tags = [unit_tag],
                                            queue_command = False,
@@ -244,13 +257,14 @@ class SC2EnvWrapper:
         create starcraft stop action
         :return: stop action
         """
+        # Function.ability(456, "Stop_Stop_quick", cmd_quick, 4, 3665),
         return raw_pb.ActionRawUnitCommand(ability_id = 4,
                                            unit_tags=[unit_tag],
                                            queue_command = False)
 
     def noop(self, unit_tag):
+        # Function.ui_func(0, "no_op", no_op),
         return None
 
     def __del__(self):
         self.env.close()
-
