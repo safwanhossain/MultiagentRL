@@ -1,7 +1,6 @@
 import numpy as np
 
 from pysc2.lib import features
-from pysc2.lib import actions as sc2_actions
 from pysc2.env import sc2_env
 
 from s2clientprotocol import raw_pb2 as raw_pb
@@ -13,35 +12,40 @@ import torch
 _PLAYER_SELF = features.PlayerRelative.SELF
 _PLAYER_NEUTRAL = features.PlayerRelative.NEUTRAL  # beacon/minerals
 _PLAYER_ENEMY = features.PlayerRelative.ENEMY
-_NOOP = sc2_actions.FUNCTIONS.no_op.id
-_STOP = sc2_actions.FUNCTIONS.Stop_Stop_quick.id
-_MOVE = sc2_actions.FUNCTIONS.Move_minimap.id
-_ATTACK = sc2_actions.FUNCTIONS.Attack_Attack_minimap.id
+
+NUM_MOVE_ACTIONS = 4
 
 class SC2EnvWrapper:
 
     mini_games = {
         "DefeatRoaches": {
-            "NUM_ALLIES": 20,  # Used to determine input size to NN
+            "NUM_ALLIES": 9,  # Used to determine input size to NN
             "NUM_OTHERS": 4,  # Used to determine input size to NN
-            "NUM_TOTAL": 25,
-            "ACTION_SIZE": 2 + 16 + 4 # 2 for noop and stop, 16 for movements, 4 to target enemies,
+            "NUM_TOTAL": 13,
+            "ACTION_SIZE": NUM_MOVE_ACTIONS + 4, # 2 +  #2 for noop and stop, NUM_MOVE_ACTIONS for movements, 4 to target enemies,
+            "X_MAP_SIZE": 63,  # Map size is 64x64, with indices between 0 and 63
+            "Y_MAP_SIZE": 63,
+            "COMBAT": True
         },
 
         "CollectMineralShards": {
             "NUM_ALLIES": 2,  # Used to determine input size to NN
             "NUM_OTHERS": 20,  # Used to determine input size to NN
             "NUM_TOTAL": 22,
-            "ACTION_SIZE":2 + 16 # 2 for noop and stop, 16 for movement
+            "ACTION_SIZE": NUM_MOVE_ACTIONS, # 2 + , # 2 for noop and stop, NUM_MOVE_ACTIONS for movement
+            "X_MAP_SIZE": 63, # Map size is 64x64, with indices between 0 and 63
+            "Y_MAP_SIZE": 63,
+            "COMBAT": False
         }
     }
 
     unit_type_mapping = {
         48: 1,
-        1680: 2
+        110: 2,
+        1680: 3
     }
 
-    def __init__(self, map, step_mul=None, visualize=False):
+    def __init__(self, map, step_mul=5, visualize=False):
         """
         :param map[string]: map to use
         :param agent_type[agent object type]: agent to use
@@ -54,15 +58,16 @@ class SC2EnvWrapper:
                                                 use_raw_units=True,
                                                 camera_width_world_units=24)
         self.map = map
-        self.step_mul = step_mul or 1
+        self.step_mul = step_mul
         self.visualize = visualize
 
         self.mg_info = SC2EnvWrapper.mini_games[map]
 
         self.n = self.mg_info["NUM_ALLIES"]
         self.action_size = self.mg_info["ACTION_SIZE"]
-        self.agent_obs_size = (self.mg_info["NUM_TOTAL"] - 1) * 6
-        self.global_state_size = self.mg_info["NUM_TOTAL"] * 5
+        self.obs_size = 6 if self.mg_info["COMBAT"] else 4
+        self.agent_obs_size = (self.mg_info["NUM_TOTAL"] - 1) * self.obs_size
+        self.global_state_size = self.mg_info["NUM_TOTAL"] * (self.obs_size - 1)
         self.env = sc2_env.SC2Env(map_name=self.map,
                    agent_interface_format=self.aif,
                    step_mul=self.step_mul,
@@ -70,6 +75,7 @@ class SC2EnvWrapper:
         self.agent_obs = None
         self.global_obs = None
         self.unit_tags = np.zeros(self.mg_info["NUM_TOTAL"], dtype=np.int64)
+        self.num_others = self.mg_info["NUM_TOTAL"]
 
     def reset(self):
         """
@@ -78,6 +84,7 @@ class SC2EnvWrapper:
         :return: return the environments reset timestep
         """
         ts = self.env.reset()
+        self.num_others = self.mg_info["NUM_TOTAL"]
         return self.transform_env_info(ts)
 
     def transform_env_info(self, timestep):
@@ -95,11 +102,15 @@ class SC2EnvWrapper:
         :return: individual agent observations and global observations for the critic
         """
         obs = timestep[0].observation
+        reward = timestep[0].reward
+        true_reward = timestep[0].reward
         agent_observations = np.zeros([self.mg_info["NUM_ALLIES"], self.agent_obs_size], dtype=np.float32)
-        global_observations = np.zeros([self.mg_info["NUM_TOTAL"], 5], dtype=np.float32)
+        global_observations = np.zeros([self.mg_info["NUM_TOTAL"], self.obs_size - 1], dtype=np.float32)
+
         # Get xy of all units
         raw_units = sorted(obs.raw_units, key=lambda u: u.tag)
         xy = np.array([[unit.x, unit.y] for unit in raw_units])
+        min_distances = 0.
 
         global_idx_self = 0
         global_idx_other = self.mg_info["NUM_ALLIES"]
@@ -113,31 +124,33 @@ class SC2EnvWrapper:
 
             ut = SC2EnvWrapper.unit_type_mapping.get(unit.unit_type)
             if ut is None:
-                print("unit type mapping not found. Create unit mapping for unit type", unit.unit_type)
-                raise TypeError
+                raise TypeError("unit type mapping not found. Create unit mapping for unit type", unit.unit_type)
 
-            global_observations[gi] = [ut,
-                                       unit.x,
-                                       unit.y,
-                                       unit.health,
-                                       unit.shield]
+            if self.mg_info["COMBAT"]:
+                global_observations[gi] = [ut,
+                                           unit.x,
+                                           unit.y,
+                                           unit.health,
+                                           unit.shield]
+            else:
+                global_observations[gi] = [ut,
+                                           unit.x,
+                                           unit.y]
             self.unit_tags[gi] = unit.tag
 
             if unit.alliance != _PLAYER_SELF:
                 continue
 
-            agent_obs = np.zeros([self.mg_info["NUM_TOTAL"] - 1, 6])
+            agent_obs = np.zeros([self.mg_info["NUM_TOTAL"] - 1, self.obs_size])
             # precalculate all distances usig matrices
             xy_distances = [unit.x, unit.y] - xy
             distances = np.sqrt(np.sum(np.square(xy_distances), axis=1))
+            min_d = 1000.
             # setup indexing
             obs_self_idx = 0
             obs_enemy_idx = self.mg_info["NUM_ALLIES"] - 1
 
             for unit_idx, other_unit in enumerate(raw_units):
-                # Only consider units within vision
-                if distances[unit_idx] > 9: # taken from https://liquipedia.net/starcraft2/Sight for marine sight
-                    continue
                 # Ignore own unit
                 if unit is other_unit:
                     continue
@@ -145,35 +158,58 @@ class SC2EnvWrapper:
                 if other_unit.alliance != _PLAYER_SELF:
                     obs_idx = obs_enemy_idx
                     obs_enemy_idx += 1
+                    if distances[unit_idx] < min_d:
+                        min_d = distances[unit_idx]
                 else:
                     obs_idx = obs_self_idx
                     obs_self_idx += 1
+
+                # Only consider units within vision
+                if distances[unit_idx] > 9:  # taken from https://liquipedia.net/starcraft2/Sight for marine sight
+                    continue
 
                 ut = SC2EnvWrapper.unit_type_mapping.get(other_unit.unit_type)
                 if ut is None:
                     print("unit type mapping not found. Create unit mapping for unit type", other_unit.unit_type)
                     raise TypeError
 
-                agent_obs[obs_idx] = [ut,
-                                      xy_distances[unit_idx][0],
-                                      xy_distances[unit_idx][1],
-                                      distances[unit_idx],
-                                      other_unit.health,
-                                      other_unit.shield]
+                if self.mg_info["COMBAT"]:
+                    agent_obs[obs_idx] = [ut,
+                                          xy_distances[unit_idx][0],
+                                          xy_distances[unit_idx][1],
+                                          distances[unit_idx],
+                                          other_unit.health,
+                                          other_unit.shield]
+                else:
+                    agent_obs[obs_idx] = [ut,
+                                          xy_distances[unit_idx][0],
+                                          xy_distances[unit_idx][1],
+                                          distances[unit_idx]]
 
-            agent_obs -=  np.mean(agent_obs, axis=0, keepdims=True)
-            agent_obs /= (np.std(agent_obs, axis=0, keepdims=True) + 1e-8)
+            min_distances += min_d
             agent_observations[global_idx_self - 1] = agent_obs.flatten()
-
-        global_observations -= np.mean(global_observations, axis=0, keepdims=True)
-        global_observations /= (np.std(global_observations, axis=0, keepdims=True) + 1e-8)
 
         self.global_obs, self.agent_obs = global_observations, agent_observations
 
+        # REWARD SHAPING
+        num_others = global_idx_other - 1
+        if num_others > self.num_others:
+            print("STAGE CLEARED")
+            reward += 10
+        self.num_others = num_others
+
+        reward -= min_distances / ((global_idx_self + 1) * 5000.)
+
+        if self.mg_info["COMBAT"]:
+            hp_diff = 580 - np.sum(global_observations[self.mg_info["NUM_ALLIES"]:, 3])  # 580 = roach hp (145) * 4
+            reward += hp_diff / 100.
+
+
         return torch.from_numpy(agent_observations), \
                torch.from_numpy(global_observations.flatten()), \
-               torch.from_numpy(np.array(timestep[0].reward, dtype=np.float32)),\
+               torch.from_numpy(np.array(true_reward, dtype=np.float32)),\
                timestep[0].last()
+            
 
     def step(self, action_indices):
         """
@@ -188,27 +224,20 @@ class SC2EnvWrapper:
             unit_tag = self.unit_tags[n]
             xy = (self.global_obs[n][1], self.global_obs[n][2])
             unit_cmd = None
-            if index == 0:
-                #unit_cmd = self.noop(unit_tag)
-                action = _NOOP
-            elif index == 1:
-                #unit_cmd = self.stop(unit_tag)
-                action = _NOOP
-            elif 1 < index <= 17:
-                #unit_cmd = self.move(unit_tag, index, xy)
-                action = _NOOP
-            elif index > 16:
-                #unit_cmd = self.attack(unit_tag, index, xy)
-                action = _NOOP
+            # if index == 0:
+            #     unit_cmd = self.noop(unit_tag)
+            # elif index == 1:
+            #     unit_cmd = self.stop(unit_tag)
+            if 0 <= index < NUM_MOVE_ACTIONS:
+                unit_cmd = self.move(unit_tag, index, xy)
+            elif index > NUM_MOVE_ACTIONS + 1:
+                unit_cmd = self.attack(unit_tag, index, xy)
 
-            #raw_action = raw_pb.ActionRaw(unit_command=unit_cmd)
-            #actions.append(sc_pb.Action(action_raw=raw_action))
-            actions.append(sc2_actions.FunctionCall(action, []))
+            raw_action = raw_pb.ActionRaw(unit_command=unit_cmd)
+            actions.append(sc_pb.Action(action_raw=raw_action))
 
         # run sc2 environment with actions
         timestep = self.env.step([actions])
-        # actions = [
-        #     sc2_actions.FunctionCall(_SELECT_ARMY, [_SELECT_ALL])
         # get interpretable observations and rewards
         return self.transform_env_info(timestep)
 
@@ -220,13 +249,15 @@ class SC2EnvWrapper:
         :param xy: current xy location of unit
         :return: move action
         """
-        index = index - 2
-        angle = 2. * np.pi * index / 16
-        x = int(round(xy[0] + np.cos(angle) * 10))
-        y = int(round(xy[1] + np.sin(angle) * 10))
+        index = index
+        angle = 2. * np.pi * index / NUM_MOVE_ACTIONS
+        x = int(round(xy[0] + np.cos(angle) * 100))
+        y = int(round(xy[1] + np.sin(angle) * 100))
+
+        x = np.clip(x, 0, self.mg_info["X_MAP_SIZE"])
+        y = np.clip(y, 0, self.mg_info["Y_MAP_SIZE"])
 
         point = common_pb.Point2D(x=x, y=y)
-        # move minimap
         return raw_pb.ActionRawUnitCommand(ability_id = 16,
                                            unit_tags = [unit_tag],
                                            queue_command = False,
@@ -240,13 +271,12 @@ class SC2EnvWrapper:
         :param xy: current xy location of unit
         :return: attack action
         """
-        target_idx = self.mg_info["NUM_ALLIES"] + (index - 17)
-        target_xy = (self.global_obs[target_idx].x, self.global_obs[target_idx].y)
+        target_idx = self.mg_info["NUM_ALLIES"] + (index - NUM_MOVE_ACTIONS - 1)
+        target_xy = (self.global_obs[target_idx][1], self.global_obs[target_idx][2])
         # Out of Marine range see https://liquipedia.net/starcraft2/Marine_(Legacy_of_the_Void)
-        if np.sqrt(np.sum(np.square(xy - target_xy)), axis=1) > 5:
+        if np.sqrt(np.sum(np.square(np.subtract(xy, target_xy)))) > 5:
             return None
         target_tag = self.unit_tags[target_idx]
-        # Function.ability(15, "Attack_Attack_minimap", cmd_minimap, 23, 3674),
         return raw_pb.ActionRawUnitCommand(ability_id = 23,
                                            unit_tags = [unit_tag],
                                            queue_command = False,
@@ -257,13 +287,11 @@ class SC2EnvWrapper:
         create starcraft stop action
         :return: stop action
         """
-        # Function.ability(456, "Stop_Stop_quick", cmd_quick, 4, 3665),
         return raw_pb.ActionRawUnitCommand(ability_id = 4,
                                            unit_tags=[unit_tag],
                                            queue_command = False)
 
     def noop(self, unit_tag):
-        # Function.ui_func(0, "no_op", no_op),
         return None
 
     def __del__(self):

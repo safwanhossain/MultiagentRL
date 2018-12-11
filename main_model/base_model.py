@@ -36,7 +36,7 @@ class BaseModel:
         self.num_entries_per_update = self.batch_size * self.seq_len
 
         self.use_gpu = use_gpu
-        self.device = torch.device('cuda:1' if torch.cuda.is_available() and use_gpu else 'cpu')
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() and use_gpu else 'cpu')
         self.params = {}
 
         # The buffer to hold all the information of an episode
@@ -172,7 +172,7 @@ class BaseModel:
             curr_agent_obs, curr_global_state, reward, _ = env.reset()
 
             for t in range(self.seq_len):
-                print('t', t)
+                #print('t', t)
                 # get observations, by executing current action
                 # TODO add parallelism
                 next_agent_obs, next_global_state, reward, end_signal = env.step(actions)

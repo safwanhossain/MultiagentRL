@@ -21,7 +21,7 @@ if __name__ == "__main__":
                         help='Whether to use SAC or not [default: True]')
     parser.add_argument('--TD_LAMBDA', default='True',
                         help='Whether to use TD_LAMBDA or TD_ONE [default: True]')
-    parser.add_argument('--track_results', default='False',
+    parser.add_argument('--track_results', default='True',
                         help='Whether to track results on comet or not [default: True]')
     parser.add_argument('--save_model', default='False',
                         help='Whether to save the trained model or not [default: True]')
@@ -33,7 +33,7 @@ if __name__ == "__main__":
                         help='Number of parallel environments (default to 1)')
     parser.add_argument('--maac_advantage', default="False",
                         help='Whether to use the MAAC advantage')
-    parser.add_argument('--to_log_csv', default="False",
+    parser.add_argument('--to_log_csv', default="True",
                         help='Whether to use log resutls to csv files')
 
     flags = parser.parse_args()
@@ -54,7 +54,7 @@ if __name__ == "__main__":
     critic_arch = {'h_size': 128, 'n_layers':2}
 
     # Files to log the stats - allows us to compare various models
-    reward_file = "reward_5_coma_fast.csv"
+    reward_file = "reward_sc2_mineral_shards_coma.csv"
     critic_loss_file = "critic_loss.csv"
     agent_loss_file = "agent_loss.csv"
 
