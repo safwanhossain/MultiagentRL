@@ -11,7 +11,7 @@ import os
 
 class BaseModel:
 
-    def __init__(self, envs, batch_size, seq_len, discount, lam,
+    def __init__(self, envs, batch_size, replay_memory, seq_len, discount, lam,
                  lr_critic=0.0001, lr_actor=0.0001, alpha=0.1, use_gpu=True, track_results=True, log_files=None):
         """
         Initializes comet tracking and cuda gpu
@@ -19,6 +19,8 @@ class BaseModel:
         super().__init__()
 
         self.batch_size = batch_size
+        # save experience from "replay_memory" epochs from the past
+        self.replay_memory = replay_memory
         self.seq_len = seq_len
         self.discount = discount
         self.lam = lam
@@ -34,16 +36,22 @@ class BaseModel:
         self.epochs = 5000
         self.num_updates = 1
         self.num_entries_per_update = self.batch_size * self.seq_len
-
         self.use_gpu = use_gpu
-        self.device = torch.device('cuda:0' if torch.cuda.is_available() and use_gpu else 'cpu')
+        self.device = torch.device('cuda:1' if torch.cuda.is_available() and use_gpu else 'cpu')
         self.params = {}
 
-        # The buffer to hold all the information of an episode
-        self.buffer = Buffer(self.num_entries_per_update, self.seq_len, self.num_entries_per_update,
-                             self.n_agents, self.obs_size, self.state_size, self.action_size)
+        # The buffer to hold all the information of an episode, list of buffers for experience replay
 
-        # Create "placeholders" for incoming training data (Sorry, tensorflow habit)
+        self.replay_buffer = [Buffer(max_size= self.num_entries_per_update,
+                                     seq_len = self.seq_len,
+                                     batch_size = self.num_entries_per_update,
+                                     n_agents=self.n_agents, agent_obs_size=self.obs_size,
+                                     global_obs_size=self.state_size, action_size=self.action_size)
+                              for _ in range(self.replay_memory)]
+
+        self.replay_buffer_index = 0
+        self.is_replay_buffer_full = False
+
         # joint-action state pairs
         self.joint_action_state_pl = torch.zeros(
             (batch_size, seq_len, self.state_size + self.action_size * self.n_agents))
@@ -97,6 +105,7 @@ class BaseModel:
             "SAC": self.SAC,
             "TD_LAMBDA": self.TD_LAMBDA,
             "MAAC": self.use_maac,
+            "replay_memory": self.replay_memory
         })
         self.experiment.log_multiple_params(self.params)
 
@@ -174,11 +183,10 @@ class BaseModel:
             for t in range(self.seq_len):
                 #print('t', t)
                 # get observations, by executing current action
-                # TODO add parallelism
                 next_agent_obs, next_global_state, reward, end_signal = env.step(actions)
 
-                self.buffer.add_to_buffer(t, curr_agent_obs, next_agent_obs, curr_global_state, next_global_state,
-                                           actions, reward)
+                self.replay_buffer[self.replay_buffer_index].add_to_buffer(t, curr_agent_obs, next_agent_obs, 
+                        curr_global_state, next_global_state, actions, reward)
                 curr_agent_obs, curr_global_state = next_agent_obs, next_global_state
                 rewards.append(reward)
 
@@ -197,67 +205,13 @@ class BaseModel:
 
             count += self.seq_len
 
+        self.replay_buffer[self.replay_buffer_index].format_buffer_data()
+        self.replay_buffer_index += 1
+        if self.replay_buffer_index >= self.replay_memory:
+            self.is_replay_buffer_full = True
+        self.replay_buffer_index %= self.replay_memory
         print("Mean reward for this batch: {0:5.3}".format(np.mean(rewards)))
         return np.mean(rewards)
-
-    def gather_rollout(self, eps):
-        """
-           gathers rollouts under the current policy
-           saves data in format compatible with coma training
-           global state computation is specific to simple-spread environment
-           TODO: make env agnostic, add helper functions specific to each environment
-           :param self: instance of coma model
-           :param eps:
-           :return:
-           """
-        for i in range(self.batch_size):
-
-            # initialize action to noop
-            joint_action = torch.zeros((self.n_agents, self.action_size))
-            joint_action[:, 0] = 1
-
-            env = self.envs[np.random.choice(self.num_envs)]
-            env.reset()
-            self.reset_agents()
-
-            for t in range(self.seq_len):
-
-                # get observations, by executing current joint action
-                obs_n, global_state, reward_n, _ = env.step(joint_action)
-
-                # they all get the same reward, save the reward
-                self.reward_seq_pl[i, t] = reward_n[0]
-
-                self.global_state_pl[i, t, :] = global_state
-
-                # for each agent, save observation, compute next action
-                for n in range(self.n_agents):
-                    # one-hot agent index
-                    agent_idx = torch.zeros(self.n_agents)
-                    agent_idx[n] = 1
-
-                    # get distribution over actions, concatenate observation and prev action for actor training
-                    obs_action = torch.cat((obs_n[n][0:self.obs_size], joint_action[n, :], agent_idx), -1)
-                    actor_input = obs_action
-
-                    # save the actor input for training
-                    self.actor_input_pl[n][i, t, :] = actor_input
-
-                    action = self.agents[n].get_action(self.actor_input_pl[n][i, t, :].view(1, 1, -1), eps=eps)
-                    joint_action[n, :] = action
-
-                    # save the next joint action for training
-                    self.joint_action_pl[i, t, :] = joint_action.flatten()
-
-        # concatenate the joint action, global state, set network inputs to torch tensors
-        # action taken at state s
-        self.joint_action_state_pl = torch.cat((self.joint_action_pl, self.global_state_pl), dim=-1).to(self.device)
-
-        self.joint_action_state_pl.requires_grad_(True)
-
-        # return the mean reward of the batch
-        print("Mean reward for this batch: {0:5.3}".format(np.mean(self.reward_seq_pl)))
-        return np.mean(self.reward_seq_pl)
 
     def log_values_to_file(self):
         with open(self.reward_file, 'a', newline='') as reward_csv:
@@ -290,38 +244,45 @@ class BaseModel:
     def update_actor(self):
         pass
 
-    def format_buffer_data(self):
-        """
-        Reshape buffer data to correct dimensions for maac
-        """
-        self.reward_seq_pl[:, :] = self.buffer.rewards[:, :].numpy()
+    def sample_from_buffer(self):
 
-        self.joint_action_state_pl[:, :, :self.action_size * self.n_agents] = self.buffer.actions.view(self.batch_size,
-                                                                                                       self.seq_len, -1)
-        # pair actions with the state at which they were taken
-        self.joint_action_state_pl[:, :, self.action_size * self.n_agents:] = self.buffer.curr_global_state[:, :, :]
+        active_buffers = self.replay_memory if self.is_replay_buffer_full else self.replay_buffer_index
+        samples_per_buffer = self.batch_size // active_buffers
+        print("active buffers ", active_buffers, " samples per buffer ", samples_per_buffer)
+        data_index = 0
 
-        # observations are one step ahead of actions here, because they will be paired and fed to the actor network
-        self.observations[:, :, :, :] = self.buffer.next_agent_obs.permute(2, 0, 1, 3)
-        self.actions[:, :, :, :] = self.buffer.actions.permute(2, 0, 1, 3)
+        # sample episodes from replay buffer
+        for buf in range(active_buffers - 1):
+            sampled_data = self.replay_buffer[buf].sample_from_buffer(samples_per_buffer)
+            self.joint_action_state_pl[data_index:data_index + samples_per_buffer, :, :] = \
+                sampled_data["joint_action_state"]
+            for n in range(self.n_agents):
+                self.actor_input_pl[n][data_index:data_index + samples_per_buffer, :, :] = \
+                    sampled_data["actor_input"][n]
+            self.reward_seq_pl[data_index:data_index + samples_per_buffer, :] = sampled_data["reward_seq"]
+            self.observations[:, data_index:data_index + samples_per_buffer, :, :] = sampled_data["observations"]
+            self.actions[:, data_index:data_index + samples_per_buffer, :, :] = sampled_data["actions"]
+            data_index += samples_per_buffer
 
-        for n in range(self.n_agents):
-            agent_idx = torch.zeros(self.batch_size, self.seq_len, self.n_agents)
-            agent_idx = agent_idx.scatter(2, torch.zeros(agent_idx.shape).fill_(n).long(), 1)
-
-            actor_input = torch.cat(
-                (self.buffer.next_agent_obs[:, :, n, :], self.buffer.actions[:, :, n, :], agent_idx), dim=2)
-            actor_input = actor_input.view(self.batch_size, self.seq_len, -1).type(torch.FloatTensor)
-            self.actor_input_pl[n][:, :, :] = actor_input
-
-        return None
+        # sample remaining samples from last epoch for full batch
+        if data_index < self.batch_size:
+            buf = (self.replay_buffer_index - 1) % self.replay_memory
+            samples_per_buffer = self.batch_size - data_index
+            sampled_data = self.replay_buffer[buf].sample_from_buffer(samples_per_buffer)
+            self.joint_action_state_pl[data_index:data_index + samples_per_buffer, :, :] = \
+                sampled_data["joint_action_state"]
+            for n in range(self.n_agents):
+                self.actor_input_pl[n][data_index:data_index + samples_per_buffer, :, :] = \
+                    sampled_data["actor_input"][n]
+            self.reward_seq_pl[data_index:data_index + samples_per_buffer, :] = sampled_data["reward_seq"]
+            self.observations[:, data_index:data_index + samples_per_buffer, :, :] = sampled_data["observations"]
+            self.actions[:, data_index:data_index + samples_per_buffer, :, :] = sampled_data["actions"]
+            data_index += samples_per_buffer
 
     def update(self, epoch):
         """
         update model
         """
-        self.format_buffer_data()
-
         if epoch % 2 == 0:
             # print('e', epoch)
             self.update_target_network()
@@ -329,7 +290,6 @@ class BaseModel:
         critic_loss = self.update_critic()
         actor_loss = self.update_actor()
 
-        self.buffer.reset()
         return critic_loss, actor_loss
 
     def train(self):
@@ -342,6 +302,8 @@ class BaseModel:
             # eps has to be annealed to zero as the agents get better
             eps = 0 if self.SAC else max(0, 0.15 - 0.15*e/self.epochs)
             metrics["Reward"] = self.gather_batch(eps=eps)
+            self.sample_from_buffer()
+
             metrics["Critic Loss"], metrics["Actor Loss"] = self.update(e)
             
             self.reward_dict[e] = metrics["Reward"]

@@ -17,8 +17,8 @@ things start working). In each episode (similar to "epoch" in normal ML parlance
 
 class COMA(BaseModel):
 
-    def __init__(self, flags, envs, critic_arch, policy_arch, batch_size, seq_len, discount, lam,
-                 lr_critic=0.0001, lr_actor=0.0001, alpha=0.1, log_files=None):
+    def __init__(self, flags, envs, critic_arch, policy_arch, batch_size, replay_memory,
+                 seq_len, discount, lam, lr_critic=0.0001, lr_actor=0.0001, alpha=0.1, log_files=None):
         """
         Initialize all aspects of the model
         :param env: Environment model will be used in
@@ -32,7 +32,7 @@ class COMA(BaseModel):
         track_results = flags.track_results.lower() in ["true", "t", "yes", "y"]
         use_gpu = flags.gpu.lower() in ["true", "t", "yes", "y"]
         track_results = flags.track_results.lower() in ["true", "t", "yes", "y"]
-        super(COMA, self).__init__(envs, batch_size, seq_len, discount, lam,
+        super(COMA, self).__init__(envs, batch_size, replay_memory, seq_len, discount, lam,
                                     lr_critic=lr_critic, lr_actor=lr_actor, alpha=0.1, use_gpu=use_gpu,
                                     track_results=track_results, log_files=log_files)
 

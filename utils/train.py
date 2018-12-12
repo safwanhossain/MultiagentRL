@@ -3,7 +3,7 @@ sys.path.append('../')
 from comet_ml import Experiment
 import argparse
 from environment.particle_env import make_env, visualize
-from environment.sc2_env_wrapper import SC2EnvWrapper
+#from environment.sc2_env_wrapper import SC2EnvWrapper
 import numpy as np
 import time
 from main_model.coma import COMA
@@ -25,9 +25,9 @@ if __name__ == "__main__":
                         help='Whether to track results on comet or not [default: True]')
     parser.add_argument('--save_model', default='False',
                         help='Whether to save the trained model or not [default: True]')
-    parser.add_argument('--num_agents', type=int, default=5,
+    parser.add_argument('--num_agents', type=int, default=3,
                         help='Number of agents in particle environment [default: 3]')
-    parser.add_argument('--env', default="sc2",
+    parser.add_argument('--env', default="particle",
                         help='Environment to run ("sc2" or "particle" [default: particle]')
     parser.add_argument('--num_env', default="1",
                         help='Number of parallel environments (default to 1)')
@@ -35,7 +35,8 @@ if __name__ == "__main__":
                         help='Whether to use the MAAC advantage')
     parser.add_argument('--to_log_csv', default="True",
                         help='Whether to use log resutls to csv files')
-
+    parser.add_argument('--exp_replay', default="True",
+                        help='Whether to use experience replay')
     flags = parser.parse_args()
 
     envs = []
@@ -63,8 +64,9 @@ if __name__ == "__main__":
     else:
         Model = COMA
 
+    replay_memory = 10 if flags.exp_replay.lower() in ["true", "t", "yes", "y"] else 1
     model = Model(flags, envs=envs, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=30, seq_len=80, discount=0.9, lam=0.8, alpha=0.1, lr_critic=0.0002,
+                  batch_size=30, replay_memory=replay_memory, seq_len=80, discount=0.9, lam=0.8, alpha=0.1, lr_critic=0.0002,
                   lr_actor=0.0001, log_files=[reward_file, critic_loss_file, agent_loss_file])
 
     st = time.time()
