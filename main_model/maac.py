@@ -270,7 +270,7 @@ class MAAC(BaseModel):
             weights = weights / np.sum(weights)
 
             # print('t', t)
-            targets[:, :, t] = G[:, :, t, 1:self.seq_len - t].dot(weights)
+            targets[:, :, t] = torch.from_numpy(G[:, :, t, 1:self.seq_len - t].dot(weights))
 
             if self.SAC:
                 joint_action_dist = 1

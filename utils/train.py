@@ -15,7 +15,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu', default='True',
                         help='use GPU if True, CPU if False [default: True]')
-    parser.add_argument('--maac', default='False',
+    parser.add_argument('--maac', default='True',
                         help='Whether to use maac critic or not [default: True]')
     parser.add_argument('--SAC', default='True',
                         help='Whether to use SAC or not [default: True]')
@@ -25,7 +25,7 @@ if __name__ == "__main__":
                         help='Whether to track results on comet or not [default: True]')
     parser.add_argument('--save_model', default='False',
                         help='Whether to save the trained model or not [default: True]')
-    parser.add_argument('--num_agents', type=int, default=5,
+    parser.add_argument('--num_agents', type=int, default=3,
                         help='Number of agents in particle environment [default: 3]')
     parser.add_argument('--env', default="sc2",
                         help='Environment to run ("sc2" or "particle" [default: particle]')
@@ -46,7 +46,7 @@ if __name__ == "__main__":
             env.seed(i*1000)
             envs.append(env)
     elif flags.env == "sc2":
-        envs = [SC2EnvWrapper("CollectMineralShards") for _ in range(int(flags.num_env))]
+        envs = [SC2EnvWrapper("DefeatRoaches") for _ in range(int(flags.num_env))]
     else:
         raise TypeError("Requested environment does not exist or is not implemented yet")
 
@@ -64,7 +64,7 @@ if __name__ == "__main__":
         Model = COMA
 
     model = Model(flags, envs=envs, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=30, seq_len=80, discount=0.9, lam=0.8, alpha=0.1, lr_critic=0.0002,
+                  batch_size=20, seq_len=383, discount=0.9, lam=0.8, alpha=0.1, lr_critic=0.0002,
                   lr_actor=0.0001, log_files=[reward_file, critic_loss_file, agent_loss_file])
 
     st = time.time()

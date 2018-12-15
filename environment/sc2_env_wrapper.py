@@ -192,23 +192,31 @@ class SC2EnvWrapper:
         self.global_obs, self.agent_obs = global_observations, agent_observations
 
         # REWARD SHAPING
+        #reward -= min_distances / ((global_idx_self + 1) * 5000.)
+
+        if self.mg_info["COMBAT"]:
+            if reward == 1:
+                reward = 0
+            roach_hp_loss = 580 - np.sum(global_observations[self.mg_info["NUM_ALLIES"]:, 3])  # 580 = roach hp (145) * 4
+            marine_hp_loss = 405 - np.sum(global_observations[:self.mg_info["NUM_ALLIES"], 3])
+            reward += roach_hp_loss - marine_hp_loss / 2
+
+        end_signal = timestep[0].last()
         num_others = global_idx_other - 1
         if num_others > self.num_others:
             print("STAGE CLEARED")
-            reward += 10
+            end_signal = True
+            if self.mg_info["COMBAT"]:
+                reward += np.sum(global_observations[:self.mg_info["NUM_ALLIES"], 3]) + 200
         self.num_others = num_others
 
-        reward -= min_distances / ((global_idx_self + 1) * 5000.)
 
-        if self.mg_info["COMBAT"]:
-            hp_diff = 580 - np.sum(global_observations[self.mg_info["NUM_ALLIES"]:, 3])  # 580 = roach hp (145) * 4
-            reward += hp_diff / 100.
 
 
         return torch.from_numpy(agent_observations), \
                torch.from_numpy(global_observations.flatten()), \
                torch.from_numpy(np.array(true_reward, dtype=np.float32)),\
-               timestep[0].last()
+               end_signal
             
 
     def step(self, action_indices):

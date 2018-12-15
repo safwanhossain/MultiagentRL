@@ -68,7 +68,7 @@ class BaseModel:
 
 
         self.experiment = Experiment(api_key='1jl4lQOnJsVdZR6oekS6WO5FI', \
-                project_name='all_in_one_elsa',#self.__class__.__name__,
+                project_name='all_in_one_steph',#self.__class__.__name__,
                                      auto_param_logging=False, auto_metric_logging=False,
                                      disabled=(not track_results))
         
@@ -176,6 +176,9 @@ class BaseModel:
                 # get observations, by executing current action
                 # TODO add parallelism
                 next_agent_obs, next_global_state, reward, end_signal = env.step(actions)
+
+                if end_signal:
+                    reward += self.seq_len - t
 
                 self.buffer.add_to_buffer(t, curr_agent_obs, next_agent_obs, curr_global_state, next_global_state,
                                            actions, reward)
@@ -356,3 +359,5 @@ class BaseModel:
             if (e % 50) == 0:
                 self.log_values_to_file()
                 self.save_model()
+
+        self.log_values_to_file()

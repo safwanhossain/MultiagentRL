@@ -217,7 +217,7 @@ class COMA(BaseModel):
             self.critic_optimizer.step()
 
         self.metrics["mean_critic_loss"] = sum_loss / self.seq_len
-        return sum_loss / self.seq_len
+        return sum_loss
 
 
     def td_lambda(self):
