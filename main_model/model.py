@@ -49,11 +49,11 @@ class Model(BaseModel):
         self.action_size = env.action_size
         self.obs_size = env.agent_obs_size
         self.state_size = env.global_state_size
-        self.alpha = 0.3
+        self.alpha = 0.2
         self.env = env
         self.lr_critic = lr_critic
         self.lr_actor = lr_actor
-        self.epochs = 300
+        self.epochs = 1000
         self.num_updates = 1
         self.num_entries_per_update = self.batch_size * self.seq_len
 
@@ -260,7 +260,7 @@ class Model(BaseModel):
         :return:
         """
         lam = self.lam
-        n_ahead = 25
+        n_ahead = 10
 
         lt = self.seq_len #torch.min(self.end_indices)
 
@@ -323,7 +323,7 @@ class Model(BaseModel):
             pred = self.critic(self.get_critic_input((t, t + 1))).squeeze()
             # print('pred', pred[0])
 
-            loss = torch.mean(torch.pow(targets[:, :, t] - pred, 2)) / float(lt)
+            loss = torch.mean(torch.pow(targets[:, :, t] - pred, 2))
             sum_loss += loss.item()
             # print("critic loss", sum_loss)
             # fit the Critic
@@ -331,7 +331,7 @@ class Model(BaseModel):
             loss.backward(retain_graph=True)
             self.critic_optimizer.step()
 
-        return sum_loss #/ lt.float()
+        return sum_loss # lt.float()
 
     def format_buffer_data(self):
         """
@@ -416,15 +416,15 @@ if __name__ == "__main__":
     elif flags.env == "sc2":
         visualize_ = flags.evaluate
         print("visualize", visualize_)
-        env = SC2EnvWrapper("DefeatRoaches", visualize=visualize_)
+        env = SC2EnvWrapper("CollectMineralShards", visualize=visualize_)
     else:
         raise TypeError("Requested environment does not exist or is not implemented yet")
 
-    policy_arch = {'type': MLPActor, 'h_size': 128}
+    policy_arch = {'type': MLPActor, 'h_size': 256}
     critic_arch = {'h_size': 128, 'n_layers': 2}
 
     model = Model(flags, env=env, critic_arch=critic_arch, policy_arch=policy_arch,
-                  batch_size=20, seq_len=383, discount=0.8, lam=0.8, lr_critic=0.00002, lr_actor=0.00001)
+                  batch_size=30, seq_len=400, discount=0.8, lam=0.8, lr_critic=0.0000005, lr_actor=0.0000000005)
 
     if flags.env == "particle":
         env.seq_len = model.seq_len

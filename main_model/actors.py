@@ -21,7 +21,7 @@ class GRUActor(nn.Module):
                                       batch_first=True).to(self.device)
 
         self.linear = nn.Linear(h_size, self.action_size).to(self.device)
-        self.apply(normal_init)
+        #self.apply(normal_init)
         self.to(self.device)
 
     def reset(self):
@@ -65,7 +65,7 @@ class MLPActor(nn.Module):
             nn.ReLU(),
             nn.Linear(h_size, action_size)
         )
-        self.apply(normal_init)
+        #self.apply(normal_init)
         self.to(self.device)
 
     def reset(self):
